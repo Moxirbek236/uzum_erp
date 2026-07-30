@@ -1,0 +1,108 @@
+import { PrismaService } from '../../core/prisma/prisma.service';
+export declare class ReviewsService {
+    private readonly prisma;
+    private readonly logger;
+    constructor(prisma: PrismaService);
+    getUnreadReviewCount(shopId?: number): Promise<{
+        unreadCount: number;
+    }>;
+    getReviews(shopId?: number, page?: number, size?: number, filter?: string, search?: string): Promise<{
+        total: number;
+        page: number;
+        size: number;
+        items: {
+            id: string;
+            createdAt: Date;
+            shopId: number;
+            isRead: boolean;
+            cons: string | null;
+            pros: string | null;
+            content: string | null;
+            customerName: string | null;
+            productId: number;
+            rating: number;
+            packagingRating: number | null;
+            deliveryRating: number | null;
+            purchasedAt: Date | null;
+            isPinned: boolean;
+            replyStatus: string | null;
+            aiReply: string | null;
+            repliedAt: Date | null;
+            metadata: import("@prisma/client/runtime/client").JsonValue | null;
+            sysCreatedAt: Date;
+            sysUpdatedAt: Date;
+        }[];
+    }>;
+    generateAiReply(reviewId: string): Promise<{
+        aiReply: string;
+    }>;
+    replyToReview(reviewId: string, replyText: string): Promise<{
+        id: string;
+        createdAt: Date;
+        shopId: number;
+        isRead: boolean;
+        cons: string | null;
+        pros: string | null;
+        content: string | null;
+        customerName: string | null;
+        productId: number;
+        rating: number;
+        packagingRating: number | null;
+        deliveryRating: number | null;
+        purchasedAt: Date | null;
+        isPinned: boolean;
+        replyStatus: string | null;
+        aiReply: string | null;
+        repliedAt: Date | null;
+        metadata: import("@prisma/client/runtime/client").JsonValue | null;
+        sysCreatedAt: Date;
+        sysUpdatedAt: Date;
+    }>;
+    markAsRead(reviewId: string): Promise<{
+        id: string;
+        createdAt: Date;
+        shopId: number;
+        isRead: boolean;
+        cons: string | null;
+        pros: string | null;
+        content: string | null;
+        customerName: string | null;
+        productId: number;
+        rating: number;
+        packagingRating: number | null;
+        deliveryRating: number | null;
+        purchasedAt: Date | null;
+        isPinned: boolean;
+        replyStatus: string | null;
+        aiReply: string | null;
+        repliedAt: Date | null;
+        metadata: import("@prisma/client/runtime/client").JsonValue | null;
+        sysCreatedAt: Date;
+        sysUpdatedAt: Date;
+    }>;
+    togglePin(reviewId: string): Promise<{
+        id: string;
+        createdAt: Date;
+        shopId: number;
+        isRead: boolean;
+        cons: string | null;
+        pros: string | null;
+        content: string | null;
+        customerName: string | null;
+        productId: number;
+        rating: number;
+        packagingRating: number | null;
+        deliveryRating: number | null;
+        purchasedAt: Date | null;
+        isPinned: boolean;
+        replyStatus: string | null;
+        aiReply: string | null;
+        repliedAt: Date | null;
+        metadata: import("@prisma/client/runtime/client").JsonValue | null;
+        sysCreatedAt: Date;
+        sysUpdatedAt: Date;
+    } | null>;
+    sendReplyToUzum(token: string, reviewIdStr: string, content: string): Promise<boolean>;
+    handleAutoReply(): Promise<void>;
+    syncReviewsFromUzum(token: string): Promise<void>;
+}

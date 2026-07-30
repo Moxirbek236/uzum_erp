@@ -1,0 +1,124 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  phone     String   @unique
+  password  String
+  name      String?
+  email     String?
+  uzumToken String?
+  role      String   @default("VIEWER") // OWNER, ADMIN, MANAGER, VIEWER
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  permissions ShopPermission[]
+}
+
+model Shop {
+  id          String   @id @default(uuid())
+  uzumShopId  Int      @unique
+  name        String
+  skuPrefix   String?
+  description String?
+  avatarUrl   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ShopPermission {
+  id         String   @id @default(uuid())
+  shopId     Int
+  userId     String
+  permission String
+  
+  user       User     @relation(fields: [userId], references: [id])
+  
+  @@unique([shopId, userId, permission])
+}
+
+model Review {
+  id              String   @id // reviewId from Uzum
+  shopId          Int
+  productId       Int
+  rating          Int
+  packagingRating Int?
+  deliveryRating  Int?
+  content         String?
+  pros            String?
+  cons            String?
+  customerName    String?
+  purchasedAt     DateTime?
+  createdAt       DateTime // From Uzum dateCreated
+  isRead          Boolean  @default(false)
+  isPinned        Boolean  @default(false)
+  replyStatus     String?
+  aiReply         String?
+  repliedAt       DateTime?
+  metadata        Json?    // For characteristics, photos
+  
+  sysCreatedAt    DateTime @default(now())
+  sysUpdatedAt    DateTime @updatedAt
+}
+
+model UzumFeatureFlag {
+  id          String   @id @default(uuid())
+  accountId   Int
+  featureName String
+  enabled     Boolean
+  fetchedAt   DateTime @default(now())
+}
+
+model Product {
+  id            String   @id @default(uuid())
+  uzumProductId Int?     @unique
+  shopId        Int
+  title         String
+  sku           String?
+  price         Float    @default(0)
+  stock         Int      @default(0)
+  imageUrl      String?
+  previewImageUrl String?
+  statusValue   String?  // IN_STOCK, OUT_OF_STOCK, etc.
+  statusTitle   String?  // "Sotuvda", etc.
+  statusColor   String?
+  categoryId    Int?
+  category      String?
+  hasMoreOneSku Boolean  @default(false)
+  skuList       Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Order {
+  id                  String   @id // orderItemId from Uzum
+  shopId              Int
+  status              String
+  sellPrice           Float    @default(0)
+  sellerProfit        Float    @default(0)
+  commission          Float    @default(0)
+  purchasePrice       Float    @default(0)
+  logisticDeliveryFee Float    @default(0)
+  amountReturns       Float    @default(0)
+  productTitle        String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model FinanceSummary {
+  id                    String   @id @default(uuid())
+  shopId                Int      @unique
+  commonBalance         Float    @default(0)
+  returnsPerMonth       Float    @default(0)
+  regularWithdrawSum    Float    @default(0)
+  regularWithdrawalDate String?
+  urgentWithdrawAllowed Boolean  @default(false)
+  urgentWithdrawSum     Float    @default(0)
+  expenses              Json?
+  updatedAt             DateTime @updatedAt
+}

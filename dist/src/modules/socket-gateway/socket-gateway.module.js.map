@@ -1,0 +1,1 @@
+{"version":3,"file":"socket-gateway.module.js","sourceRoot":"","sources":["../../../../src/modules/socket-gateway/socket-gateway.module.ts"],"names":[],"mappings":";;;;;;;;;AAAA,2CAAwC;AACxC,qEAAgE;AAKzD,IAAM,mBAAmB,GAAzB,MAAM,mBAAmB;CAAG,CAAA;AAAtB,kDAAmB;8BAAnB,mBAAmB;IAH/B,IAAA,eAAM,EAAC;QACN,SAAS,EAAE,CAAC,6CAAoB,CAAC;KAClC,CAAC;GACW,mBAAmB,CAAG"}
