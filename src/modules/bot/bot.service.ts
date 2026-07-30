@@ -256,9 +256,9 @@ export class BotService implements OnModuleInit {
     ]);
 
     const revenueAggregate = await this.prisma.order.aggregate({
-      _sum: { totalAmount: true },
+      _sum: { sellPrice: true },
     });
-    const revenue = revenueAggregate._sum.totalAmount || 0;
+    const revenue = revenueAggregate._sum?.sellPrice || 0;
 
     return `<b>📊 KUNLIK YAKUNIY HISOBOT (Uzum ERP)</b>\n` +
       `📅 <b>Sana:</b> ${today}\n\n` +
@@ -278,9 +278,9 @@ export class BotService implements OnModuleInit {
     ]);
 
     const revenueAggregate = await this.prisma.order.aggregate({
-      _sum: { totalAmount: true },
+      _sum: { sellPrice: true },
     });
-    const revenue = revenueAggregate._sum.totalAmount || 0;
+    const revenue = revenueAggregate._sum?.sellPrice || 0;
 
     return `<b>🏆 OYLIK YAKUNIY HISOBOT (Uzum ERP)</b>\n` +
       `📅 <b>Davr:</b> ${monthName}\n\n` +

@@ -200,9 +200,9 @@ let BotService = BotService_1 = class BotService {
             this.prisma.order.count(),
         ]);
         const revenueAggregate = await this.prisma.order.aggregate({
-            _sum: { totalAmount: true },
+            _sum: { sellPrice: true },
         });
-        const revenue = revenueAggregate._sum.totalAmount || 0;
+        const revenue = revenueAggregate._sum?.sellPrice || 0;
         return `<b>📊 KUNLIK YAKUNIY HISOBOT (Uzum ERP)</b>\n` +
             `📅 <b>Sana:</b> ${today}\n\n` +
             `💰 <b>Jami Tushum:</b> ${new Intl.NumberFormat('uz-UZ').format(revenue)} UZS\n` +
@@ -219,9 +219,9 @@ let BotService = BotService_1 = class BotService {
             this.prisma.order.count(),
         ]);
         const revenueAggregate = await this.prisma.order.aggregate({
-            _sum: { totalAmount: true },
+            _sum: { sellPrice: true },
         });
-        const revenue = revenueAggregate._sum.totalAmount || 0;
+        const revenue = revenueAggregate._sum?.sellPrice || 0;
         return `<b>🏆 OYLIK YAKUNIY HISOBOT (Uzum ERP)</b>\n` +
             `📅 <b>Davr:</b> ${monthName}\n\n` +
             `💰 <b>Oylik Tushum:</b> ${new Intl.NumberFormat('uz-UZ').format(revenue)} UZS\n` +
