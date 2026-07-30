@@ -12,13 +12,14 @@ const analytics_controller_1 = require("./analytics.controller");
 const analytics_service_1 = require("./analytics.service");
 const reviews_module_1 = require("../reviews/reviews.module");
 const products_module_1 = require("../products/products.module");
+const finance_module_1 = require("../finance/finance.module");
 const uzum_integration_module_1 = require("../uzum-integration/uzum-integration.module");
 let AnalyticsModule = class AnalyticsModule {
 };
 exports.AnalyticsModule = AnalyticsModule;
 exports.AnalyticsModule = AnalyticsModule = __decorate([
     (0, common_1.Module)({
-        imports: [reviews_module_1.ReviewsModule, products_module_1.ProductsModule, uzum_integration_module_1.UzumIntegrationModule],
+        imports: [reviews_module_1.ReviewsModule, products_module_1.ProductsModule, finance_module_1.FinanceModule, uzum_integration_module_1.UzumIntegrationModule],
         controllers: [analytics_controller_1.AnalyticsController],
         providers: [analytics_service_1.AnalyticsService],
         exports: [analytics_service_1.AnalyticsService],

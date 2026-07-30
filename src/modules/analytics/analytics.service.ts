@@ -3,6 +3,7 @@ import { PrismaService } from '../../core/prisma/prisma.service';
 
 import { ReviewsService } from '../reviews/reviews.service';
 import { ProductsService } from '../products/products.service';
+import { FinanceService } from '../finance/finance.service';
 import { UzumAuthService } from '../uzum-integration/uzum-auth/uzum-auth.service';
 
 @Injectable()
@@ -11,6 +12,7 @@ export class AnalyticsService {
     private readonly prisma: PrismaService,
     private readonly reviewsService: ReviewsService,
     private readonly productsService: ProductsService,
+    private readonly financeService: FinanceService,
     private readonly uzumAuthService: UzumAuthService,
   ) {}
 
@@ -49,6 +51,9 @@ export class AnalyticsService {
 
     // Sync products
     await this.productsService.syncProductsFromUzum(token);
+
+    // Sync finance
+    await this.financeService.syncFinanceDataFromUzum(token);
 
     // Sync reviews
     await this.reviewsService.syncReviewsFromUzum(token);
@@ -92,11 +97,11 @@ export class AnalyticsService {
     const revenueAggregate = await this.prisma.order.aggregate({
       where: whereShop,
       _sum: {
-        totalAmount: true,
+        sellPrice: true,
       },
     });
 
-    const totalRevenue = revenueAggregate._sum.totalAmount || 0;
+    const totalRevenue = revenueAggregate._sum.sellPrice || 0;
 
     return {
       summary: {

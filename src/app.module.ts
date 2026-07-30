@@ -15,6 +15,7 @@ import { PrismaModule } from './core/prisma/prisma.module';
 
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { ProductsModule } from './modules/products/products.module';
+import { FinanceModule } from './modules/finance/finance.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { ProductsModule } from './modules/products/products.module';
     AnalyticsModule,
     NotificationsModule,
     ProductsModule,
+    FinanceModule,
     BotModule, 
     SocketGatewayModule
   ],

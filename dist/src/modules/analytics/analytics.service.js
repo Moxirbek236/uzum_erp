@@ -14,16 +14,19 @@ const common_1 = require("@nestjs/common");
 const prisma_service_1 = require("../../core/prisma/prisma.service");
 const reviews_service_1 = require("../reviews/reviews.service");
 const products_service_1 = require("../products/products.service");
+const finance_service_1 = require("../finance/finance.service");
 const uzum_auth_service_1 = require("../uzum-integration/uzum-auth/uzum-auth.service");
 let AnalyticsService = class AnalyticsService {
     prisma;
     reviewsService;
     productsService;
+    financeService;
     uzumAuthService;
-    constructor(prisma, reviewsService, productsService, uzumAuthService) {
+    constructor(prisma, reviewsService, productsService, financeService, uzumAuthService) {
         this.prisma = prisma;
         this.reviewsService = reviewsService;
         this.productsService = productsService;
+        this.financeService = financeService;
         this.uzumAuthService = uzumAuthService;
     }
     async triggerUzumSync(userId) {
@@ -52,6 +55,7 @@ let AnalyticsService = class AnalyticsService {
         }
         await this.uzumAuthService.syncShopsForUser(user.id, token);
         await this.productsService.syncProductsFromUzum(token);
+        await this.financeService.syncFinanceDataFromUzum(token);
         await this.reviewsService.syncReviewsFromUzum(token);
         return { success: true, message: 'Uzum API sync completed successfully' };
     }
@@ -81,10 +85,10 @@ let AnalyticsService = class AnalyticsService {
         const revenueAggregate = await this.prisma.order.aggregate({
             where: whereShop,
             _sum: {
-                totalAmount: true,
+                sellPrice: true,
             },
         });
-        const totalRevenue = revenueAggregate._sum.totalAmount || 0;
+        const totalRevenue = revenueAggregate._sum.sellPrice || 0;
         return {
             summary: {
                 totalRevenue,
@@ -107,6 +111,7 @@ exports.AnalyticsService = AnalyticsService = __decorate([
     __metadata("design:paramtypes", [prisma_service_1.PrismaService,
         reviews_service_1.ReviewsService,
         products_service_1.ProductsService,
+        finance_service_1.FinanceService,
         uzum_auth_service_1.UzumAuthService])
 ], AnalyticsService);
 //# sourceMappingURL=analytics.service.js.map
