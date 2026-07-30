@@ -6,7 +6,7 @@ import { PrismaService } from '../../core/prisma/prisma.service';
 export class ReviewsService {
   private readonly logger = new Logger(ReviewsService.name);
 
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService) {}
 
   async getUnreadReviewCount(shopId?: number) {
     const whereShop = shopId ? { shopId } : {};
@@ -38,10 +38,6 @@ export class ReviewsService {
       where.rating = { lte: 3 };
     } else if (filter === 'PINNED') {
       where.isPinned = true;
-    } else if (filter === 'AI_REPLIED') {
-      where.aiReply = { not: null };
-    } else if (filter === 'REPLIED') {
-      where.replyStatus = 'REPLIED';
     }
 
     if (search) {
@@ -83,21 +79,11 @@ export class ReviewsService {
     const rating = review.rating || 5;
     let responseText = '';
 
-    const envKeys = process.env.GEMINI_API_KEYS || "";
-    const keys = envKeys.split(',').map(k => k.trim()).filter(k => k.length > 0);
-    if (keys.length === 0) {
-      // Fallback keys or handle error
-      keys.push(process.env.GEMINI_API_KEY || "");
-    }
-    // Kalitlarni tasodifiy tartibda aralashtiramiz
-    const shuffledKeys = keys.sort(() => 0.5 - Math.random());
-
-    let lastError = null;
-
-    for (const apiKey of shuffledKeys) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
-
+    try {
+      if (process.env.GEMINI_API_KEY) {
+        const { GoogleGenAI } = require('@google/genai');
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        
         const prompt = `Siz Uzum Marketdagi onlayn do'kon menejerisiz. Mijoz do'konimizdan mahsulot xarid qilib quyidagi sharhni qoldirdi:
 Mijoz ismi: ${review.customerName || 'Anonim'}
 Baho (5 yulduzdan): ${rating}
@@ -105,54 +91,31 @@ Afzalliklari: ${review.pros || 'Kiritilmagan'}
 Kamchiliklari: ${review.cons || 'Kiritilmagan'}
 Sharh matni: ${review.content || 'Kiritilmagan'}
 
-Vazifangiz: Mijozga mijoz yozgan tilida (lotin yoki kirill yozuvida) juda samimiy, professional va qisqa javob yozing.
-Agar baho past bo'lsa (1-3 yulduz), FAQAT noqulaylik uchun uzr so'rang. QAT'IYAN TAQIQLANADI: mijozga biz bilan bog'lanishni so'rash, pulni qaytarish (vozvrat) yoki tovarni almashtirib berishni va'da qilish. Bular haqida umuman yozmang! Faqatgina noqulaylik uchun uzr so'rang va e'tibori uchun rahmat ayting.
+Vazifangiz: Mijozga mijoy yozgan tilida (lotin yoki kirill yozuvida) juda samimiy, professional va qisqa javob yozing.
+Agar baho past bo'lsa (1-3 yulduz), uzr so'rang va muammoni hal qilishga tayyor ekanligingizni bildiring.
 Agar baho yuqori bo'lsa (4-5 yulduz), minnatdorchilik bildiring.
 Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat javob matnini o'zini qaytaring.`;
 
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-          }),
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
         });
-
-        const rawBody = await response.text();
-
-        if (response.ok) {
-          const data = JSON.parse(rawBody);
-          if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
-            responseText = data.candidates[0].content.parts[0].text.trim();
-            this.logger.log(`[Gemini] Reply generated successfully with key ...${apiKey.slice(-4)}`);
-            break; // Muvaffaqiyatli bo'lsa, qolgan kalitlarni tekshirishni to'xtatamiz
-          }
-        } else {
-          this.logger.warn(`[Gemini] Key ...${apiKey.slice(-4)} failed: ${response.status}`);
-          lastError = new Error(`API Error ${response.status}: ${rawBody.slice(0, 300)}`);
-          // Agar xato bo'lsa (masalan 429), loop davom etadi va keyingi kalitni sinab ko'radi
+        
+        if (response.text) {
+          responseText = response.text.trim();
         }
-      } catch (err) {
-        this.logger.warn(`[Gemini] Request failed with key ...${apiKey.slice(-4)}: ${err instanceof Error ? err.message : String(err)}`);
-        lastError = err;
       }
+    } catch (err) {
+      this.logger.error('Gemini API xatoligi', err);
     }
 
     if (!responseText) {
-      this.logger.warn(`[Gemini] All keys failed. Using static fallback reply based on rating ${rating}.`);
-    }
-
-    // Agar Gemini javob bermasa yoki hamma kalitlar limitga tushgan bo'lsa, bahoga qarab tayyor javob ishlatamiz
-    if (!responseText) {
-      const name = review.customerName || 'mijoz';
       if (rating === 5) {
-        responseText = `Assalomu alaykum ${name}! Xaridingiz va 5 yulduzli a'lo bahoyingiz uchun samimiy minnatdorchilik bildiramiz! Mahsulotimiz sizga ma'qul kelganidan juda mamnunmiz. Do'konimizda sizni yana kutib qolamiz!`;
+        responseText = `Assalomu alaykum ${review.customerName || 'mijoz'}! Xaridingiz va 5 yulduzli a'lo bahoyingiz uchun samimiy minnatdorchilik bildiramiz! Mahsulotimiz sizga ma'qul kelganidan juda mamnunmiz. Do'konimizda sizni yana kutib qolamiz!`;
       } else if (rating === 4) {
-        responseText = `Assalomu alaykum ${name}! Xaridingiz va ijobiy fikringiz uchun katta rahmat! Mahsulotimiz haqidagi mulohazangizni e'tiborga olamiz va xizmatimizni yanada yaxshilashga harakat qilamiz.`;
-      } else if (rating === 3) {
-        responseText = `Assalomu alaykum ${name}! Fikr-mulohazangiz uchun rahmat! Xaridingizdan to'liq mamnun bo'lmaganingiz uchun uzr so'raymiz. Xizmat sifatimizni oshirish uchun doimo harakat qilamiz.`;
+        responseText = `Assalomu alaykum! Xaridingiz va ijobiy fikringiz uchun rahmat! Mahsulotimiz haqidagi mulohazangizni e'tiborga olamiz va xizmat ko'rsatish sifatini yanada yaxshilashga harakat qilamiz.`;
       } else {
-        responseText = `Assalomu alaykum ${name}! Yuzaga kelgan noqulaylik uchun chin dildan uzr so'raymiz. Fikringizni bildirganingiz uchun rahmat — bu biz uchun juda muhim va sifatimizni yaxshilashga undaydi.`;
+        responseText = `Assalomu alaykum ${review.customerName || 'mijoz'}! Yuzaga kelgan noqulaylik uchun chin dildan uzr so'raymiz. Sifat biz uchun eng muhim mezon. Iltimos, muammoni zudlik bilan hal qilishimiz uchun qo'llab-quvvatlash xizmatimizga bog'laning.`;
       }
     }
 
@@ -206,7 +169,7 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
     try {
       this.logger.log(`Sending real Uzum API reply for review #${reviewIdStr}`);
       const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
-
+      
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
@@ -233,18 +196,7 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
       });
 
       if (!res.ok) {
-        const errBody = await res.text();
-        this.logger.warn(`Uzum review reply create returned status ${res.status}. Body: ${errBody}`);
-
-        // Agar "feedback-001" (javob allaqachon bor) xatosi kelsa, DBni REPLIED qilib yangilaymiz
-        if (errBody.includes('feedback-001') || errBody.includes('has reply')) {
-          this.logger.log(`Review #${reviewIdStr} already has a reply on Uzum. Marking as REPLIED in DB.`);
-          await this.prisma.review.update({
-            where: { id: reviewIdStr },
-            data: { replyStatus: 'REPLIED', repliedAt: new Date() },
-          });
-        }
-
+        this.logger.warn(`Uzum review reply create returned status ${res.status}`);
         return false;
       }
 
@@ -261,7 +213,7 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
    * Runs every 1 minute if AUTO_REPLY=true in .env.
    * Processes 1 un-replied review per minute to prevent Uzum rate-limiting/blocking.
    */
-  @Cron(CronExpression.EVERY_30_SECONDS)
+@Cron(CronExpression.EVERY_5_MINUTES)
   async handleAutoReply() {
     if (process.env.AUTO_REPLY !== 'true') {
       return;
@@ -269,15 +221,14 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
 
     this.logger.log('Running AUTO_REPLY background job...');
 
-    const unrepliedReviews = await this.prisma.review.findMany({
+    const unrepliedReview = await this.prisma.review.findFirst({
       where: {
         OR: [{ replyStatus: null }, { replyStatus: { not: 'REPLIED' } }],
       },
       orderBy: { createdAt: 'asc' },
-      take: 5,
     });
 
-    if (!unrepliedReviews || unrepliedReviews.length === 0) {
+    if (!unrepliedReview) {
       return;
     }
 
@@ -290,49 +241,30 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
       return;
     }
 
-    this.logger.log(`AUTO_REPLY found ${unrepliedReviews.length} reviews to process...`);
+    // Generate AI reply
+    const { aiReply } = await this.generateAiReply(unrepliedReview.id);
 
-    for (const review of unrepliedReviews) {
-      try {
-        // Generate AI reply
-        const { aiReply } = await this.generateAiReply(review.id);
+    // Send real reply to Uzum API
+    await this.sendReplyToUzum(firstUser.uzumToken, unrepliedReview.id, aiReply);
 
-        // Send real reply to Uzum API
-        await this.sendReplyToUzum(firstUser.uzumToken, review.id, aiReply);
+    // Update local DB status
+    await this.prisma.review.update({
+      where: { id: unrepliedReview.id },
+      data: {
+        replyStatus: 'REPLIED',
+        aiReply: aiReply,
+        isRead: true,
+      },
+    });
 
-        // Update local DB status
-        await this.prisma.review.update({
-          where: { id: review.id },
-          data: {
-            replyStatus: 'REPLIED',
-            aiReply: aiReply,
-            repliedAt: new Date(),
-            isRead: true,
-          },
-        });
-
-        this.logger.log(`AUTO_REPLY successfully sent AI reply for review #${review.id}`);
-      } catch (err) {
-        this.logger.error(`AUTO_REPLY error for review #${review.id}:`, err);
-
-        // Agar limitga tushib qolsak, bu minut uchun loopni to'xtatamiz
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        if (errorMsg.includes('429') || errorMsg.includes('Quota') || errorMsg.includes('exceeded')) {
-          this.logger.warn('Gemini 429 limitiga tushildi. Loop to\'xtatildi, qolganiga keyingi daqiqada davom etadi.');
-          break;
-        }
-      }
-
-      // Har bir so'rovdan keyin qat'iy 8 soniya kutish
-      await new Promise(resolve => setTimeout(resolve, 8000));
-    }
+    this.logger.log(`AUTO_REPLY successfully sent AI reply for review #${unrepliedReview.id}`);
   }
 
   async syncReviewsFromUzum(token: string) {
     try {
       this.logger.log('Fetching real product reviews from Uzum API...');
       const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
-
+      
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
@@ -344,7 +276,7 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      const res = await fetch(`${baseUrl}/api/seller/product-reviews?page=0&size=2000`, {
+      const res = await fetch(`${baseUrl}/api/seller/product-reviews?page=0&size=50`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ filter: 'ALL' }),
@@ -365,20 +297,13 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
           const productId = item.product?.productId || 0;
           const rating = item.rating || 5;
 
-          // Agar Uzumdan kelgan ma'lumotda 'reply' obyekti bo'lsa, demak unga allaqachon javob berilgan!
-          const actualReplyStatus = item.reply ? 'REPLIED' : (item.replyStatus || null);
-          const actualAiReply = item.reply ? item.reply.content : null;
-
           await this.prisma.review.upsert({
             where: { id: reviewId },
             update: {
               rating,
               content: item.content || null,
               isRead: item.read || false,
-              replyStatus: actualReplyStatus,
-              // Agar avvalroq AI emas, balki odam (Uzum orqali) javob yozgan bo'lsa ham DBga tushib turadi.
-              aiReply: actualAiReply,
-              repliedAt: item.reply?.dateCreated ? new Date(item.reply.dateCreated) : (actualReplyStatus ? new Date() : null),
+              replyStatus:  item.replyStatus || null,
             },
             create: {
               id: reviewId,
@@ -394,9 +319,7 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
               createdAt: item.dateCreated ? new Date(item.dateCreated) : new Date(),
               isRead: item.read || false,
               isPinned: item.pinned || false,
-              replyStatus: actualReplyStatus,
-              aiReply: actualAiReply,
-              repliedAt: item.reply?.dateCreated ? new Date(item.reply.dateCreated) : (actualReplyStatus ? new Date() : null),
+              replyStatus: item.replyStatus || null,
             },
           });
         }
