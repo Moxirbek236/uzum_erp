@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../core/prisma/prisma.service';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -117,24 +117,32 @@ export class BotService implements OnModuleInit {
    * 2. Checks available time slots for that invoice
    * 3. Sends Telegram alert if slots are available
    */
-  @Cron('*/1 * * * *')
+  private isRunning = false;
+
+  @Cron(CronExpression.EVERY_30_SECONDS)
   async handleSlotMonitoringCron() {
-    const firstUser = await this.prisma.user.findFirst({
-      where: { uzumToken: { not: null } },
-    });
+    if (this.isRunning) return;
+    this.isRunning = true;
+    try {
+      const firstUser = await this.prisma.user.findFirst({
+        where: { uzumToken: { not: null } },
+      });
 
-    if (!firstUser?.uzumToken) {
-      return;
-    }
+      if (!firstUser?.uzumToken) {
+        return;
+      }
 
-    const shops = await this.prisma.shop.findMany({
-      take: 5,
-    });
+      const shops = await this.prisma.shop.findMany({
+        take: 5,
+      });
 
-    if (!shops.length) return;
+      if (!shops.length) return;
 
-    for (const shop of shops) {
-      await this.checkSlotsForShop(firstUser.uzumToken, shop.uzumShopId);
+      for (const shop of shops) {
+        await this.checkSlotsForShop(firstUser.uzumToken, shop.uzumShopId);
+      }
+    } finally {
+      this.isRunning = false;
     }
   }
 
