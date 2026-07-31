@@ -15,7 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.FboInvoicesController = void 0;
 const common_1 = require("@nestjs/common");
 const fbo_invoices_service_1 = require("./fbo-invoices.service");
-const jwt_auth_guard_1 = require("../auth/guards/jwt-auth.guard");
+const jwt_auth_guard_1 = require("../../common/guards/jwt-auth.guard");
 let FboInvoicesController = class FboInvoicesController {
     invoicesService;
     constructor(invoicesService) {

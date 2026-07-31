@@ -103,6 +103,59 @@ export class AnalyticsService {
 
     const totalRevenue = revenueAggregate._sum.sellPrice || 0;
 
+    // 5. Generate Sales Chart (Last 7 days)
+    const salesChart = [];
+    const today = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const startOfDay = new Date(d.setHours(0, 0, 0, 0));
+      const endOfDay = new Date(d.setHours(23, 59, 59, 999));
+      
+      const dayOrders = await this.prisma.order.aggregate({
+        where: {
+          ...whereShop,
+          updatedAt: { gte: startOfDay, lte: endOfDay }
+        },
+        _sum: { sellPrice: true },
+        _count: { id: true }
+      });
+      
+      salesChart.push({
+        date: startOfDay.toLocaleDateString('uz-UZ', { month: 'short', day: 'numeric' }),
+        sales: dayOrders._sum.sellPrice || 0,
+        orders: dayOrders._count.id || 0,
+      });
+    }
+
+    // 6. Generate Recent Alerts
+    const recentAlerts = [];
+    const latestReviews = await this.prisma.review.findMany({
+      where: { ...whereShop, isRead: false },
+      orderBy: { createdAt: 'desc' },
+      take: 3,
+    });
+    
+    latestReviews.forEach((r, idx) => {
+      recentAlerts.push({
+        id: `rev-${r.id}`,
+        type: 'review',
+        title: 'Yangi sharh',
+        message: `Mijoz mahsulotingizga baho berdi: ${r.rating} yulduz.`,
+        time: r.createdAt.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' })
+      });
+    });
+    
+    if (lowStockProducts > 0) {
+      recentAlerts.push({
+        id: 'low-stock',
+        type: 'inventory',
+        title: 'Zaxira tugamoqda',
+        message: `${lowStockProducts} ta mahsulot zaxirasi minimal darajaga yetdi.`,
+        time: new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' })
+      });
+    }
+
     return {
       summary: {
         totalRevenue,
@@ -114,8 +167,8 @@ export class AnalyticsService {
         unreadReviews,
         totalShops,
       },
-      salesChart: [],
-      recentAlerts: [],
+      salesChart,
+      recentAlerts,
     };
   }
 }

@@ -8,8 +8,8 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.FboInvoicesModule = void 0;
 const common_1 = require("@nestjs/common");
-const fbo_invoices_service_1 = require("./fbo-invoices.service");
 const fbo_invoices_controller_1 = require("./fbo-invoices.controller");
+const fbo_invoices_service_1 = require("./fbo-invoices.service");
 let FboInvoicesModule = class FboInvoicesModule {
 };
 exports.FboInvoicesModule = FboInvoicesModule;

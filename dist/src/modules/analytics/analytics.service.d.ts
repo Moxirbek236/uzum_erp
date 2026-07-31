@@ -25,7 +25,17 @@ export declare class AnalyticsService {
             unreadReviews: number;
             totalShops: number;
         };
-        salesChart: never[];
-        recentAlerts: never[];
+        salesChart: {
+            date: string;
+            sales: number;
+            orders: number;
+        }[];
+        recentAlerts: {
+            id: string;
+            type: string;
+            title: string;
+            message: string;
+            time: string;
+        }[];
     }>;
 }
