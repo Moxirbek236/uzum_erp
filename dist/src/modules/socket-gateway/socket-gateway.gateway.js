@@ -11,12 +11,18 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SocketGatewayGateway = void 0;
 const websockets_1 = require("@nestjs/websockets");
+const socket_io_1 = require("socket.io");
 let SocketGatewayGateway = class SocketGatewayGateway {
+    server;
     handleMessage(client, payload) {
         return 'Hello world!';
     }
 };
 exports.SocketGatewayGateway = SocketGatewayGateway;
+__decorate([
+    (0, websockets_1.WebSocketServer)(),
+    __metadata("design:type", socket_io_1.Server)
+], SocketGatewayGateway.prototype, "server", void 0);
 __decorate([
     (0, websockets_1.SubscribeMessage)('message'),
     __metadata("design:type", Function),
@@ -24,6 +30,6 @@ __decorate([
     __metadata("design:returntype", String)
 ], SocketGatewayGateway.prototype, "handleMessage", null);
 exports.SocketGatewayGateway = SocketGatewayGateway = __decorate([
-    (0, websockets_1.WebSocketGateway)()
+    (0, websockets_1.WebSocketGateway)({ cors: true })
 ], SocketGatewayGateway);
 //# sourceMappingURL=socket-gateway.gateway.js.map

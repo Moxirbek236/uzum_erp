@@ -14,7 +14,8 @@ let SocketGatewayModule = class SocketGatewayModule {
 exports.SocketGatewayModule = SocketGatewayModule;
 exports.SocketGatewayModule = SocketGatewayModule = __decorate([
     (0, common_1.Module)({
-        providers: [socket_gateway_gateway_1.SocketGatewayGateway]
+        providers: [socket_gateway_gateway_1.SocketGatewayGateway],
+        exports: [socket_gateway_gateway_1.SocketGatewayGateway],
     })
 ], SocketGatewayModule);
 //# sourceMappingURL=socket-gateway.module.js.map

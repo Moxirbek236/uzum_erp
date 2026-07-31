@@ -12,13 +12,17 @@ var NotificationsService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.NotificationsService = void 0;
 const common_1 = require("@nestjs/common");
+const schedule_1 = require("@nestjs/schedule");
 const prisma_service_1 = require("../../core/prisma/prisma.service");
+const socket_gateway_gateway_1 = require("../socket-gateway/socket-gateway.gateway");
 let NotificationsService = NotificationsService_1 = class NotificationsService {
     prisma;
+    socketGateway;
     logger = new common_1.Logger(NotificationsService_1.name);
     baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
-    constructor(prisma) {
+    constructor(prisma, socketGateway) {
         this.prisma = prisma;
+        this.socketGateway = socketGateway;
     }
     async getUnreadCount(userId) {
         const user = await this.prisma.user.findUnique({
@@ -53,10 +57,32 @@ let NotificationsService = NotificationsService_1 = class NotificationsService {
             return { unreadCount: 0 };
         }
     }
+    async checkNotificationsCron() {
+        this.logger.log('Running notifications check cron...');
+        const users = await this.prisma.user.findMany({
+            where: { uzumToken: { not: null } },
+        });
+        for (const user of users) {
+            const result = await this.getUnreadCount(user.id);
+            if (result.unreadCount > 0) {
+                this.socketGateway.server.emit('notification.count.updated', {
+                    userId: user.id,
+                    unreadCount: result.unreadCount,
+                });
+            }
+        }
+    }
 };
 exports.NotificationsService = NotificationsService;
+__decorate([
+    (0, schedule_1.Cron)(schedule_1.CronExpression.EVERY_5_MINUTES),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], NotificationsService.prototype, "checkNotificationsCron", null);
 exports.NotificationsService = NotificationsService = NotificationsService_1 = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [prisma_service_1.PrismaService])
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService,
+        socket_gateway_gateway_1.SocketGatewayGateway])
 ], NotificationsService);
 //# sourceMappingURL=notifications.service.js.map
