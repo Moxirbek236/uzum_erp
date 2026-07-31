@@ -16,6 +16,7 @@ export declare class BotService implements OnModuleInit {
     private getAuthHeaders;
     private getUzumToken;
     private findOpenSlotInfo;
+    private lastAlertedSlot;
     private checkSlotsForShop;
     private sendSlotAlert;
     private deleteAndSend;

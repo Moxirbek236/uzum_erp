@@ -300,17 +300,17 @@ export class BotService implements OnModuleInit {
       });
 
       let slotsList = '';
-      openSlots.slice(0, 5).forEach((s, i) => {
+      openSlots.slice(0, 3).forEach((s, i) => {
         const sFrom = new Date(s.timeFrom);
         const sTo = new Date(s.timeTo);
         const sDateStr = sFrom.toLocaleDateString('uz-UZ', { day: '2-digit', month: '2-digit', year: 'numeric' });
         const sFromTime = sFrom.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' });
         const sToTime = sTo.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' });
-        const prefix = i === openSlots.slice(0, 5).length - 1 && openSlots.length <= 5 ? '  └' : '  ├';
+        const prefix = i === openSlots.slice(0, 3).length - 1 && openSlots.length <= 3 ? '  └' : '  ├';
         slotsList += `${prefix} ✅ ${sDateStr} ${sFromTime} - ${sToTime}\n`;
       });
-      if (openSlots.length > 5) {
-        slotsList += `  └ ... va yana ${openSlots.length - 5} ta slot\n`;
+      if (openSlots.length > 3) {
+        slotsList += `  └ ... va yana ${openSlots.length - 3} ta slot\n`;
       }
 
       const message =
@@ -330,10 +330,20 @@ export class BotService implements OnModuleInit {
     }
   }
 
+  // Prevent spam by storing the last alerted timeFrom per shop
+  private lastAlertedSlot: Record<number, number> = {};
+
   private async checkSlotsForShop(token: string, shopId: number) {
     // Background cron job faqata 4 kun ichidagi slotlarni tekshiradi
     const info = await this.findOpenSlotInfo(token, shopId, 4);
     if (!info || !info.hasSlot || !info.message || !info.timeFrom) return;
+
+    // Deduplication check: if we already sent an alert for this exact slot, don't spam.
+    if (this.lastAlertedSlot[shopId] === info.timeFrom) {
+      return;
+    }
+    
+    this.lastAlertedSlot[shopId] = info.timeFrom;
 
     await this.sendSlotAlert(shopId, info.message, info.timeFrom);
     this.logger.log(
