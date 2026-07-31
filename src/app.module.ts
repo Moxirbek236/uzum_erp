@@ -16,6 +16,7 @@ import { PrismaModule } from './core/prisma/prisma.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { ProductsModule } from './modules/products/products.module';
 import { FinanceModule } from './modules/finance/finance.module';
+import { FboInvoicesModule } from './modules/fbo-invoices/fbo-invoices.module';
 
 @Module({
   imports: [
@@ -36,7 +37,8 @@ import { FinanceModule } from './modules/finance/finance.module';
     ProductsModule,
     FinanceModule,
     BotModule, 
-    SocketGatewayModule
+    SocketGatewayModule,
+    FboInvoicesModule
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -23,6 +23,7 @@ const prisma_module_1 = require("./core/prisma/prisma.module");
 const notifications_module_1 = require("./modules/notifications/notifications.module");
 const products_module_1 = require("./modules/products/products.module");
 const finance_module_1 = require("./modules/finance/finance.module");
+const fbo_invoices_module_1 = require("./modules/fbo-invoices/fbo-invoices.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -46,7 +47,8 @@ exports.AppModule = AppModule = __decorate([
             products_module_1.ProductsModule,
             finance_module_1.FinanceModule,
             bot_module_1.BotModule,
-            socket_gateway_module_1.SocketGatewayModule
+            socket_gateway_module_1.SocketGatewayModule,
+            fbo_invoices_module_1.FboInvoicesModule
         ],
         controllers: [app_controller_1.AppController],
         providers: [app_service_1.AppService],
