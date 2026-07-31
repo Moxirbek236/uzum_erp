@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
-import { FboInvoicesService } from './fbo-invoices.service';
 import { FboInvoicesController } from './fbo-invoices.controller';
+import { FboInvoicesService } from './fbo-invoices.service';
 
 @Module({
   controllers: [FboInvoicesController],
