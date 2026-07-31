@@ -32,8 +32,40 @@ export class BotService implements OnModuleInit {
       });
 
       this.bot.onText(/\/slots/, async (msg: any) => {
-        const slotsMsg = await this.buildSlotsMessage();
-        this.bot?.sendMessage(msg.chat.id, slotsMsg, { parse_mode: 'HTML' });
+        const chatId = msg.chat.id;
+        const token = await this.getUzumToken();
+        if (!token) {
+          this.bot?.sendMessage(chatId, `<b>🕒 TIME-SLOT MONITORING HOLATI</b>\n\n❌ <i>Uzum token topilmadi. Avval login qiling.</i>`, { parse_mode: 'HTML' });
+          return;
+        }
+
+        const shops = await this.prisma.shop.findMany({ take: 5 });
+        if (!shops.length) {
+          this.bot?.sendMessage(chatId, `<b>🕒 TIME-SLOT MONITORING HOLATI</b>\n\n❌ <i>Do'konlar topilmadi.</i>`, { parse_mode: 'HTML' });
+          return;
+        }
+
+        this.bot?.sendMessage(chatId, `🔍 <b>Do'konlar bo'yicha erkin slotlar tekshirilmoqda...</b>`, { parse_mode: 'HTML' });
+
+        for (const shop of shops) {
+          try {
+            const info = await this.findOpenSlotInfo(token, shop.uzumShopId);
+            if (info && info.hasSlot && info.message && info.timeFrom) {
+              const keyboard = {
+                inline_keyboard: [
+                  [{ text: '📥 Bron qilish', callback_data: `book_start:${shop.uzumShopId}:${info.timeFrom}` }],
+                ],
+              };
+              this.bot?.sendMessage(chatId, info.message, { parse_mode: 'HTML', reply_markup: keyboard });
+            } else {
+              const noSlotMsg = `🏬 <b>${shop.name || 'Ombor'}</b>\n\n❌ <i>Hozircha keyingi 3 kun uchun erkin slot topilmadi.</i>`;
+              this.bot?.sendMessage(chatId, noSlotMsg, { parse_mode: 'HTML' });
+            }
+          } catch (err) {
+            this.logger.error(`Error checking slots for shop ${shop.uzumShopId} in /slots command`, err);
+            this.bot?.sendMessage(chatId, `🏬 <b>${shop.name || 'Ombor'}</b>\n\n❌ <i>Ma'lumot olishda xatolik yuz berdi.</i>`, { parse_mode: 'HTML' });
+          }
+        }
       });
 
       this.bot.onText(/\/stats/, async (msg: any) => {
@@ -234,9 +266,9 @@ export class BotService implements OnModuleInit {
 
       const reservedFrom = latestInvoice.timeSlotReservation?.timeFrom;
 
-      // Faqat bugundan 3 kun ichidagi (0-3 kun) slotlarni olish, eng yaqinidan boshlab
+      // Faqat bugundan 7 kun ichidagi (0-7 kun) slotlarni olish, eng yaqinidan boshlab (TEST UCHUN)
       const now = Date.now();
-      const rangeEnd = now + 3 * 24 * 60 * 60 * 1000;
+      const rangeEnd = now + 7 * 24 * 60 * 60 * 1000;
 
       const openSlots = timeSlots
         .filter(
@@ -574,112 +606,7 @@ export class BotService implements OnModuleInit {
       `📈 <i>ERP Avtomatizatsiya tizimi barqaror ishlamoqda.</i>`;
   }
 
-  private async buildSlotsMessage(): Promise<string> {
-    const firstUser = await this.prisma.user.findFirst({
-      where: { uzumToken: { not: null } },
-    });
 
-    if (!firstUser?.uzumToken) {
-      return `<b>🕒 TIME-SLOT MONITORING HOLATI</b>\n\n❌ <i>Uzum token topilmadi. Avval login qiling.</i>`;
-    }
-
-    const shops = await this.prisma.shop.findMany({ take: 5 });
-    if (!shops.length) {
-      return `<b>🕒 TIME-SLOT MONITORING HOLATI</b>\n\n❌ <i>Do'konlar topilmadi.</i>`;
-    }
-
-    const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
-    const token = firstUser.uzumToken;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    };
-    if (token.includes('=')) {
-      headers['Cookie'] = token;
-    } else {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const lines: string[] = [`<b>🕒 TIME-SLOT MONITORING HOLATI</b>\n`];
-
-    for (const shop of shops) {
-      try {
-        // Get latest invoice for shop
-        const invoiceRes = await fetch(
-          `${baseUrl}/api/seller/shop/${shop.uzumShopId}/invoice?page=0&size=1`,
-          { headers },
-        );
-        if (!invoiceRes.ok) continue;
-
-        const invoices: any[] = await invoiceRes.json();
-        if (!invoices || invoices.length === 0) continue;
-
-        const latestInvoice = invoices[0];
-        const invoiceId = latestInvoice.id;
-        const stockTitle = latestInvoice.stock?.title || 'Ombor';
-        const poolSource = latestInvoice.stock?.poolSource || 'FULLFILMENT';
-        const reservedFrom = latestInvoice.timeSlotReservation?.timeFrom;
-
-        // Get available time slots
-        const slotRes = await fetch(
-          `${baseUrl}/api/seller/shop/${shop.uzumShopId}/v2/invoice/time-slot/get`,
-          {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-              invoiceIds: [invoiceId],
-              poolSource: poolSource,
-              timeFrom: latestInvoice.timeSlotReservation.timeFrom,
-            }),
-          },
-        );
-
-        // const errorText = await slotRes.text();
-
-        // this.logger.error(
-        //   `Slot API ${slotRes.status}: ${errorText}`,
-        // );
-        if (!slotRes.ok) continue;
-
-        const slotData = await slotRes.json();
-
-        const timeSlots: { timeFrom: number; timeTo: number }[] =
-          slotData?.payload?.timeSlots || [];
-
-        const openSlots = timeSlots.filter((s) => s.timeFrom !== reservedFrom);
-
-        lines.push(`🏬 <b>${shop.name || stockTitle}</b>`);
-
-        if (openSlots.length === 0) {
-          lines.push(`  ├ Erkin slot yo'q\n`);
-        } else {
-          openSlots.slice(0, 3).forEach((s, i) => {
-            const from = new Date(s.timeFrom);
-            const to = new Date(s.timeTo);
-            const dateStr = from.toLocaleDateString('uz-UZ', {
-              day: '2-digit',
-              month: '2-digit',
-              year: 'numeric',
-            });
-            const fromTime = from.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' });
-            const toTime = to.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' });
-            const prefix = i === openSlots.slice(0, 3).length - 1 ? '  └' : '  ├';
-            lines.push(`${prefix} ✅ ${dateStr} ${fromTime} - ${toTime}`);
-          });
-          if (openSlots.length > 3) {
-            lines.push(`  └ ... va yana ${openSlots.length - 3} ta slot\n`);
-          } else {
-            lines.push('');
-          }
-        }
-      } catch {
-        lines.push(`🏬 <b>${shop.name}</b>: Ma'lumot olib bo'lmadi\n`);
-      }
-    }
-
-    lines.push(`⚡ <i>Erkin o'rinlar har 1 daqiqada tekshirib turiladi.</i>`);
-    return lines.join('\n');
-  }
 
   private async buildStatsMessage(): Promise<string> {
     const [shops, products, reviews] = await Promise.all([

@@ -25,6 +25,5 @@ export declare class BotService implements OnModuleInit {
     private performBooking;
     private buildDailyReportMessage;
     private buildMonthlyReportMessage;
-    private buildSlotsMessage;
     private buildStatsMessage;
 }
