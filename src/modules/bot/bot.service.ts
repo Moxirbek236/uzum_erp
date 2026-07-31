@@ -454,7 +454,7 @@ export class BotService implements OnModuleInit {
 
       const invoices: any[] = await res.json();
       const bookable = (invoices || []).filter(
-        (inv) => !inv.timeSlotReservation && inv.invoiceStatus?.value === 'CREATED',
+        (inv) => inv.invoiceStatus?.value === 'CREATED',
       );
 
       if (bookable.length === 0) {

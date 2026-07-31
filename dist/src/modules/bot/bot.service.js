@@ -331,7 +331,7 @@ let BotService = BotService_1 = class BotService {
                 return;
             }
             const invoices = await res.json();
-            const bookable = (invoices || []).filter((inv) => !inv.timeSlotReservation && inv.invoiceStatus?.value === 'CREATED');
+            const bookable = (invoices || []).filter((inv) => inv.invoiceStatus?.value === 'CREATED');
             if (bookable.length === 0) {
                 await this.deleteAndSend(chatId, messageId, `<b>📋 BRON QILISH UCHUN NAKLADNOY YO'Q</b>\n\n` +
                     `❌ <i>Bron qilinmagan va "Yaratilgan" statusidagi nakladnoy topilmadi.</i>`, { inline_keyboard: [[{ text: '⬅️ Ortga', callback_data: `book_back:${shopId}` }]] });
