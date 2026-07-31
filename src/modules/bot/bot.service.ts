@@ -331,8 +331,8 @@ export class BotService implements OnModuleInit {
   }
 
   private async checkSlotsForShop(token: string, shopId: number) {
-    // Background cron job faqata 7 kun ichidagi slotlarni tekshiradi (TEST UCHUN)
-    const info = await this.findOpenSlotInfo(token, shopId, 7);
+    // Background cron job faqata 4 kun ichidagi slotlarni tekshiradi
+    const info = await this.findOpenSlotInfo(token, shopId, 4);
     if (!info || !info.hasSlot || !info.message || !info.timeFrom) return;
 
     await this.sendSlotAlert(shopId, info.message, info.timeFrom);
