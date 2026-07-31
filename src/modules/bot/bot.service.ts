@@ -58,7 +58,7 @@ export class BotService implements OnModuleInit {
               };
               this.bot?.sendMessage(chatId, info.message, { parse_mode: 'HTML', reply_markup: keyboard });
             } else {
-              const noSlotMsg = `🏬 <b>${shop.name || 'Ombor'}</b>\n\n❌ <i>Hozircha keyingi 3 kun uchun erkin slot topilmadi.</i>`;
+              const noSlotMsg = `🏬 <b>${shop.name || 'Ombor'}</b>\n\n❌ <i>Hozircha erkin slot topilmadi.</i>`;
               this.bot?.sendMessage(chatId, noSlotMsg, { parse_mode: 'HTML' });
             }
           } catch (err) {
@@ -253,7 +253,7 @@ export class BotService implements OnModuleInit {
           body: JSON.stringify({
             invoiceIds: [invoiceId],
             poolSource: poolSource,
-            timeFrom: Date.now(),
+            timeFrom: latestInvoice.timeSlotReservation?.timeFrom || Date.now(),
           }),
         },
       );

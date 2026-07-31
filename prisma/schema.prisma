@@ -122,3 +122,18 @@ model FinanceSummary {
   expenses              Json?
   updatedAt             DateTime @updatedAt
 }
+
+model Invoice {
+  id                    Int      @id // invoice id from Uzum
+  shopId                Int
+  status                String?
+  stockTitle            String?
+  poolSource            String?
+  timeSlotFrom          DateTime?
+  timeSlotTo            DateTime?
+  boxCount              Int      @default(0)
+  itemsCount            Int      @default(0)
+  createdAt             DateTime @default(now()) // Sync date
+  updatedAt             DateTime @updatedAt
+  rawData               Json?    // Original API response data
+}
