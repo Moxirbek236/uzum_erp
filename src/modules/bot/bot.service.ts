@@ -41,6 +41,13 @@ export class BotService implements OnModuleInit {
         this.bot?.sendMessage(msg.chat.id, statsMsg, { parse_mode: 'HTML' });
       });
 
+      // Handle inline keyboard button presses (bron qilish flow)
+      this.bot.on('callback_query', (query: any) => {
+        this.handleCallbackQuery(query).catch((err) =>
+          this.logger.error('Unhandled callback_query error', err),
+        );
+      });
+
       this.logger.log(`Telegram Bot initialized successfully. Target Group ID: ${this.groupChatId}`);
     } catch (err) {
       this.logger.error('Failed to initialize Telegram Bot polling', err);
@@ -48,9 +55,14 @@ export class BotService implements OnModuleInit {
   }
 
   /**
-   * Helper to send HTML message to configured Telegram Group
+   * Helper to send HTML message to configured Telegram Group.
+   * Optionally accepts a reply_markup (inline keyboard).
    */
-  async sendGroupNotification(text: string, targetChatId?: string): Promise<boolean> {
+  async sendGroupNotification(
+    text: string,
+    targetChatId?: string,
+    replyMarkup?: any,
+  ): Promise<boolean> {
     const chatId = targetChatId || this.groupChatId;
     if (!chatId) {
       this.logger.warn('No Telegram Group ID configured.');
@@ -67,6 +79,7 @@ export class BotService implements OnModuleInit {
           chat_id: chatId.startsWith('-') || chatId.length > 10 ? chatId : `-${chatId}`,
           text: text,
           parse_mode: 'HTML',
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
         }),
       });
 
@@ -79,6 +92,7 @@ export class BotService implements OnModuleInit {
             chat_id: chatId,
             text: text,
             parse_mode: 'HTML',
+            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
           }),
         });
         return fallbackRes.ok;
@@ -112,10 +126,10 @@ export class BotService implements OnModuleInit {
   }
 
   /**
-   * Time-Slot Monitoring Cron Job: Runs every 1 minute
+   * Time-Slot Monitoring Cron Job: Runs every 30 seconds
    * 1. Fetches the latest invoice ID from Uzum API
    * 2. Checks available time slots for that invoice
-   * 3. Sends Telegram alert if slots are available
+   * 3. Sends Telegram alert with "Bron qilish" button if slots are available
    */
   private isRunning = false;
 
@@ -124,11 +138,8 @@ export class BotService implements OnModuleInit {
     if (this.isRunning) return;
     this.isRunning = true;
     try {
-      const firstUser = await this.prisma.user.findFirst({
-        where: { uzumToken: { not: null } },
-      });
-
-      if (!firstUser?.uzumToken) {
+      const token = await this.getUzumToken();
+      if (!token) {
         return;
       }
 
@@ -139,37 +150,60 @@ export class BotService implements OnModuleInit {
       if (!shops.length) return;
 
       for (const shop of shops) {
-        await this.checkSlotsForShop(firstUser.uzumToken, shop.uzumShopId);
+        await this.checkSlotsForShop(token, shop.uzumShopId);
       }
     } finally {
       this.isRunning = false;
     }
   }
 
-  private async checkSlotsForShop(token: string, shopId: number) {
+  /**
+   * Shared helper: fetches token headers for Uzum Seller API requests.
+   */
+  private getAuthHeaders(token: string): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    };
+    if (token.includes('=')) {
+      headers['Cookie'] = token;
+    } else {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
+  }
+
+  /**
+   * Shared helper: fetches the first available Uzum token from DB.
+   */
+  private async getUzumToken(): Promise<string | null> {
+    const firstUser = await this.prisma.user.findFirst({
+      where: { uzumToken: { not: null } },
+    });
+    return firstUser?.uzumToken || null;
+  }
+
+  /**
+   * Checks a shop's latest invoice for open time slots within the next 3 days.
+   * Returns the alert message text + the earliest open timeFrom, or hasSlot:false.
+   */
+  private async findOpenSlotInfo(
+    token: string,
+    shopId: number,
+  ): Promise<{ hasSlot: boolean; message?: string; timeFrom?: number } | null> {
     try {
       const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
-
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      };
-      if (token.includes('=')) {
-        headers['Cookie'] = token;
-      } else {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
+      const headers = this.getAuthHeaders(token);
 
       // Step 1: Get latest invoice
       const invoiceRes = await fetch(
         `${baseUrl}/api/seller/shop/${shopId}/invoice?page=0&size=1`,
         { headers },
       );
-
-      if (!invoiceRes.ok) return;
+      if (!invoiceRes.ok) return null;
 
       const invoices: any[] = await invoiceRes.json();
-      if (!invoices || invoices.length === 0) return;
+      if (!invoices || invoices.length === 0) return null;
 
       const latestInvoice = invoices[0];
       const invoiceId = latestInvoice.id;
@@ -190,33 +224,31 @@ export class BotService implements OnModuleInit {
           }),
         },
       );
-
-      if (!slotRes.ok) return;
+      if (!slotRes.ok) return null;
 
       const slotData = await slotRes.json();
       const timeSlots: { timeFrom: number; timeTo: number }[] =
         slotData?.payload?.timeSlots || [];
 
-      if (timeSlots.length === 0) return;
+      if (timeSlots.length === 0) return { hasSlot: false };
 
-      // Check if any slot is different from currently reserved slot
       const reservedFrom = latestInvoice.timeSlotReservation?.timeFrom;
 
-      // --- YANGI: faqat bugundan 3 kun ichidagi (0-3 kun) slotlarni olish ---
+      // Faqat bugundan 3 kun ichidagi (0-3 kun) slotlarni olish, eng yaqinidan boshlab
       const now = Date.now();
-      const rangeEnd = now + 3 * 24 * 60 * 60 * 1000; // 3 kundan keyingi vaqt
+      const rangeEnd = now + 3 * 24 * 60 * 60 * 1000;
 
-      const openSlots = timeSlots.filter(
-        (s) =>
-          s.timeFrom !== reservedFrom &&
-          s.timeFrom >= now &&
-          s.timeFrom <= rangeEnd,
-      );
+      const openSlots = timeSlots
+        .filter(
+          (s) =>
+            s.timeFrom !== reservedFrom &&
+            s.timeFrom >= now &&
+            s.timeFrom <= rangeEnd,
+        )
+        .sort((a, b) => a.timeFrom - b.timeFrom);
 
-      if (openSlots.length === 0) return;
-      // --- YANGI qism tugadi ---
+      if (openSlots.length === 0) return { hasSlot: false };
 
-      // Format first available slot
       const firstSlot = openSlots[0];
       const fromDate = new Date(firstSlot.timeFrom);
       const toDate = new Date(firstSlot.timeTo);
@@ -235,7 +267,7 @@ export class BotService implements OnModuleInit {
         minute: '2-digit',
       });
 
-      const slotMessage =
+      const message =
         `<b>🚨 ERKIN TIME-SLOT TOPILDI!</b>\n\n` +
         `🏬 <b>Ombor:</b> ${stockTitle}\n` +
         `📍 <b>Manzil:</b> ${stockAddress}\n` +
@@ -243,14 +275,258 @@ export class BotService implements OnModuleInit {
         `🕒 <b>Vaqt:</b> ${fromTime} - ${toTime}\n` +
         `📦 <b>Nakladnoy ID:</b> #${invoiceId}\n` +
         `🔢 <b>Mavjud slot:</b> ${openSlots.length} ta\n\n` +
-        `⚡ <i>Uzum Seller panelidan zudlik bilan bron qiling!</i>`;
+        `⚡ <i>Bron qilish uchun quyidagi tugmani bosing!</i>`;
 
-      await this.sendGroupNotification(slotMessage);
-      this.logger.log(
-        `Time-slot alert sent for shop ${shopId}, invoice ${invoiceId}, slot ${dateStr} ${fromTime}`,
-      );
+      return { hasSlot: true, message, timeFrom: firstSlot.timeFrom };
     } catch (err) {
-      this.logger.error(`checkSlotsForShop error for shopId ${shopId}`, err);
+      this.logger.error(`findOpenSlotInfo error for shopId ${shopId}`, err);
+      return null;
+    }
+  }
+
+  private async checkSlotsForShop(token: string, shopId: number) {
+    const info = await this.findOpenSlotInfo(token, shopId);
+    if (!info || !info.hasSlot || !info.message || !info.timeFrom) return;
+
+    await this.sendSlotAlert(shopId, info.message, info.timeFrom);
+    this.logger.log(
+      `Time-slot alert sent for shop ${shopId}, timeFrom ${info.timeFrom}`,
+    );
+  }
+
+  /**
+   * Sends the "erkin slot topildi" alert with an inline "Bron qilish" button.
+   */
+  private async sendSlotAlert(shopId: number, message: string, timeFrom: number) {
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '📥 Bron qilish', callback_data: `book_start:${shopId}:${timeFrom}` }],
+      ],
+    };
+    await this.sendGroupNotification(message, undefined, keyboard);
+  }
+
+  /**
+   * Deletes the given message and sends a new one in its place (delete + create,
+   * not edit — matches the requested UX for every button interaction).
+   */
+  private async deleteAndSend(
+    chatId: number,
+    messageId: number,
+    text: string,
+    replyMarkup?: any,
+  ) {
+    try {
+      if (this.bot?.deleteMessage) {
+        await this.bot.deleteMessage(chatId, messageId).catch(() => undefined);
+      }
+    } finally {
+      await this.bot?.sendMessage(chatId, text, {
+        parse_mode: 'HTML',
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      });
+    }
+  }
+
+  /**
+   * Routes inline keyboard button presses.
+   *  - book_start:{shopId}:{timeFrom}              -> show bookable invoices
+   *  - book_select:{shopId}:{timeFrom}:{invoiceId}  -> perform booking
+   *  - book_back:{shopId}                           -> go back to slot alert
+   */
+  private async handleCallbackQuery(query: any) {
+    if (this.bot?.answerCallbackQuery) {
+      this.bot.answerCallbackQuery(query.id).catch(() => undefined);
+    }
+
+    const data: string = query.data || '';
+    const chatId = query.message?.chat?.id;
+    const messageId = query.message?.message_id;
+    if (!chatId || !messageId) return;
+
+    try {
+      if (data.startsWith('book_start:')) {
+        const [, shopIdStr, timeFromStr] = data.split(':');
+        await this.showInvoiceSelection(chatId, messageId, Number(shopIdStr), Number(timeFromStr));
+      } else if (data.startsWith('book_select:')) {
+        const [, shopIdStr, timeFromStr, invoiceIdStr] = data.split(':');
+        const username = query.from?.username
+          ? `@${query.from.username}`
+          : query.from?.first_name || 'Foydalanuvchi';
+        await this.performBooking(
+          chatId,
+          messageId,
+          Number(shopIdStr),
+          Number(timeFromStr),
+          Number(invoiceIdStr),
+          username,
+        );
+      } else if (data.startsWith('book_back:')) {
+        const [, shopIdStr] = data.split(':');
+        await this.backToSlotAlert(chatId, messageId, Number(shopIdStr));
+      }
+    } catch (err) {
+      this.logger.error('handleCallbackQuery error', err);
+    }
+  }
+
+  /**
+   * "Bron qilish" bosilganda: timeSlotReservation === null va
+   * invoiceStatus.value === 'CREATED' bo'lgan nakladnoylarni ro'yxat qilib chiqaradi.
+   */
+  private async showInvoiceSelection(
+    chatId: number,
+    messageId: number,
+    shopId: number,
+    timeFrom: number,
+  ) {
+    const token = await this.getUzumToken();
+    if (!token) {
+      await this.deleteAndSend(chatId, messageId, `❌ <i>Uzum token topilmadi.</i>`);
+      return;
+    }
+
+    try {
+      const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
+      const headers = this.getAuthHeaders(token);
+
+      const res = await fetch(
+        `${baseUrl}/api/seller/shop/${shopId}/invoice?page=0&size=20`,
+        { headers },
+      );
+
+      if (!res.ok) {
+        await this.deleteAndSend(
+          chatId,
+          messageId,
+          `❌ <i>Nakladnoylarni olishda xatolik yuz berdi.</i>`,
+          { inline_keyboard: [[{ text: '⬅️ Ortga', callback_data: `book_back:${shopId}` }]] },
+        );
+        return;
+      }
+
+      const invoices: any[] = await res.json();
+      const bookable = (invoices || []).filter(
+        (inv) => !inv.timeSlotReservation && inv.invoiceStatus?.value === 'CREATED',
+      );
+
+      if (bookable.length === 0) {
+        await this.deleteAndSend(
+          chatId,
+          messageId,
+          `<b>📋 BRON QILISH UCHUN NAKLADNOY YO'Q</b>\n\n` +
+          `❌ <i>Bron qilinmagan va "Yaratilgan" statusidagi nakladnoy topilmadi.</i>`,
+          { inline_keyboard: [[{ text: '⬅️ Ortga', callback_data: `book_back:${shopId}` }]] },
+        );
+        return;
+      }
+
+      const buttons = bookable.map((inv) => [
+        {
+          text: `#${inv.id} — ${inv.totalToStock ?? 0} dona`,
+          callback_data: `book_select:${shopId}:${timeFrom}:${inv.id}`,
+        },
+      ]);
+      buttons.push([{ text: '⬅️ Ortga', callback_data: `book_back:${shopId}` }]);
+
+      const text =
+        `<b>📋 BRON QILISH UCHUN NAKLADNOY TANLANG</b>\n\n` +
+        `🔢 <b>Jami:</b> ${bookable.length} ta nakladnoy\n\n` +
+        `👇 <i>Kerakli nakladnoyni tanlang:</i>`;
+
+      await this.deleteAndSend(chatId, messageId, text, { inline_keyboard: buttons });
+    } catch (err) {
+      this.logger.error(`showInvoiceSelection error for shopId ${shopId}`, err);
+      await this.deleteAndSend(chatId, messageId, `❌ <i>Xatolik yuz berdi.</i>`);
+    }
+  }
+
+  /**
+   * "Ortga" bosilganda: shop uchun joriy erkin slotni qayta tekshirib,
+   * yana "Bron qilish" tugmasi bilan alert xabarini qaytaradi.
+   */
+  private async backToSlotAlert(chatId: number, messageId: number, shopId: number) {
+    const token = await this.getUzumToken();
+    if (!token) {
+      await this.deleteAndSend(chatId, messageId, `❌ <i>Uzum token topilmadi.</i>`);
+      return;
+    }
+
+    const info = await this.findOpenSlotInfo(token, shopId);
+    if (!info || !info.hasSlot || !info.message || !info.timeFrom) {
+      await this.deleteAndSend(
+        chatId,
+        messageId,
+        `<i>Bu do'kon uchun hozircha erkin slot topilmadi.</i>`,
+      );
+      return;
+    }
+
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '📥 Bron qilish', callback_data: `book_start:${shopId}:${info.timeFrom}` }],
+      ],
+    };
+    await this.deleteAndSend(chatId, messageId, info.message, keyboard);
+  }
+
+  /**
+   * Tanlangan nakladnoy uchun time-slot bron qilish so'rovini yuboradi
+   * va natijani (muvaffaqiyatli/xatolik) yangi xabar sifatida chiqaradi.
+   */
+  private async performBooking(
+    chatId: number,
+    messageId: number,
+    shopId: number,
+    timeFrom: number,
+    invoiceId: number,
+    username: string,
+  ) {
+    const token = await this.getUzumToken();
+    if (!token) {
+      await this.deleteAndSend(chatId, messageId, `❌ <i>Uzum token topilmadi.</i>`);
+      return;
+    }
+
+    try {
+      const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
+      const headers = this.getAuthHeaders(token);
+
+      const res = await fetch(
+        `${baseUrl}/api/seller/shop/${shopId}/v2/invoice/time-slot/set`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            timeFrom,
+            invoiceIds: [invoiceId],
+            stockId: 34,
+            poolSource: 'FULLFILMENT',
+          }),
+        },
+      );
+
+      const resultData = await res.json().catch(() => null);
+
+      if (res.ok) {
+        const text =
+          `<b>✅ Muvaffaqiyatli bron qilindi!</b>\n\n` +
+          `📦 <b>Nakladnoy ID:</b> #${invoiceId}\n` +
+          `👤 <b>Bron qildi:</b> ${username}`;
+        await this.deleteAndSend(chatId, messageId, text);
+        this.logger.log(`Booking success for invoice ${invoiceId} by ${username}`);
+      } else {
+        const errMsg = resultData?.message || resultData?.error || `HTTP ${res.status}`;
+        const text =
+          `<b>❌ Bron qilishda xatolik!</b>\n\n` +
+          `📦 <b>Nakladnoy ID:</b> #${invoiceId}\n` +
+          `👤 <b>Urinish:</b> ${username}\n` +
+          `⚠️ <b>Xato:</b> ${errMsg}`;
+        await this.deleteAndSend(chatId, messageId, text);
+      }
+    } catch (err) {
+      this.logger.error(`performBooking error for invoice ${invoiceId}`, err);
+      await this.deleteAndSend(chatId, messageId, `❌ <i>Bron qilishda xatolik yuz berdi.</i>`);
     }
   }
 
@@ -418,4 +694,3 @@ export class BotService implements OnModuleInit {
       `⭐ <b>Sharhlar:</b> ${reviews} ta\n`;
   }
 }
-

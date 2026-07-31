@@ -45,13 +45,16 @@ let BotService = BotService_1 = class BotService {
                 const statsMsg = await this.buildStatsMessage();
                 this.bot?.sendMessage(msg.chat.id, statsMsg, { parse_mode: 'HTML' });
             });
+            this.bot.on('callback_query', (query) => {
+                this.handleCallbackQuery(query).catch((err) => this.logger.error('Unhandled callback_query error', err));
+            });
             this.logger.log(`Telegram Bot initialized successfully. Target Group ID: ${this.groupChatId}`);
         }
         catch (err) {
             this.logger.error('Failed to initialize Telegram Bot polling', err);
         }
     }
-    async sendGroupNotification(text, targetChatId) {
+    async sendGroupNotification(text, targetChatId, replyMarkup) {
         const chatId = targetChatId || this.groupChatId;
         if (!chatId) {
             this.logger.warn('No Telegram Group ID configured.');
@@ -66,6 +69,7 @@ let BotService = BotService_1 = class BotService {
                     chat_id: chatId.startsWith('-') || chatId.length > 10 ? chatId : `-${chatId}`,
                     text: text,
                     parse_mode: 'HTML',
+                    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
                 }),
             });
             if (!res.ok) {
@@ -76,6 +80,7 @@ let BotService = BotService_1 = class BotService {
                         chat_id: chatId,
                         text: text,
                         parse_mode: 'HTML',
+                        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
                     }),
                 });
                 return fallbackRes.ok;
@@ -97,41 +102,58 @@ let BotService = BotService_1 = class BotService {
         const message = await this.buildMonthlyReportMessage();
         await this.sendGroupNotification(message);
     }
+    isRunning = false;
     async handleSlotMonitoringCron() {
+        if (this.isRunning)
+            return;
+        this.isRunning = true;
+        try {
+            const token = await this.getUzumToken();
+            if (!token) {
+                return;
+            }
+            const shops = await this.prisma.shop.findMany({
+                take: 5,
+            });
+            if (!shops.length)
+                return;
+            for (const shop of shops) {
+                await this.checkSlotsForShop(token, shop.uzumShopId);
+            }
+        }
+        finally {
+            this.isRunning = false;
+        }
+    }
+    getAuthHeaders(token) {
+        const headers = {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+        };
+        if (token.includes('=')) {
+            headers['Cookie'] = token;
+        }
+        else {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+        return headers;
+    }
+    async getUzumToken() {
         const firstUser = await this.prisma.user.findFirst({
             where: { uzumToken: { not: null } },
         });
-        if (!firstUser?.uzumToken) {
-            return;
-        }
-        const shops = await this.prisma.shop.findMany({
-            take: 5,
-        });
-        if (!shops.length)
-            return;
-        for (const shop of shops) {
-            await this.checkSlotsForShop(firstUser.uzumToken, shop.uzumShopId);
-        }
+        return firstUser?.uzumToken || null;
     }
-    async checkSlotsForShop(token, shopId) {
+    async findOpenSlotInfo(token, shopId) {
         try {
             const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
-            const headers = {
-                'Content-Type': 'application/json',
-                Accept: 'application/json',
-            };
-            if (token.includes('=')) {
-                headers['Cookie'] = token;
-            }
-            else {
-                headers['Authorization'] = `Bearer ${token}`;
-            }
+            const headers = this.getAuthHeaders(token);
             const invoiceRes = await fetch(`${baseUrl}/api/seller/shop/${shopId}/invoice?page=0&size=1`, { headers });
             if (!invoiceRes.ok)
-                return;
+                return null;
             const invoices = await invoiceRes.json();
             if (!invoices || invoices.length === 0)
-                return;
+                return null;
             const latestInvoice = invoices[0];
             const invoiceId = latestInvoice.id;
             const stockTitle = latestInvoice.stock?.title || 'Ombor';
@@ -147,19 +169,21 @@ let BotService = BotService_1 = class BotService {
                 }),
             });
             if (!slotRes.ok)
-                return;
+                return null;
             const slotData = await slotRes.json();
             const timeSlots = slotData?.payload?.timeSlots || [];
             if (timeSlots.length === 0)
-                return;
+                return { hasSlot: false };
             const reservedFrom = latestInvoice.timeSlotReservation?.timeFrom;
             const now = Date.now();
             const rangeEnd = now + 3 * 24 * 60 * 60 * 1000;
-            const openSlots = timeSlots.filter((s) => s.timeFrom !== reservedFrom &&
+            const openSlots = timeSlots
+                .filter((s) => s.timeFrom !== reservedFrom &&
                 s.timeFrom >= now &&
-                s.timeFrom <= rangeEnd);
+                s.timeFrom <= rangeEnd)
+                .sort((a, b) => a.timeFrom - b.timeFrom);
             if (openSlots.length === 0)
-                return;
+                return { hasSlot: false };
             const firstSlot = openSlots[0];
             const fromDate = new Date(firstSlot.timeFrom);
             const toDate = new Date(firstSlot.timeTo);
@@ -176,19 +200,174 @@ let BotService = BotService_1 = class BotService {
                 hour: '2-digit',
                 minute: '2-digit',
             });
-            const slotMessage = `<b>🚨 ERKIN TIME-SLOT TOPILDI!</b>\n\n` +
+            const message = `<b>🚨 ERKIN TIME-SLOT TOPILDI!</b>\n\n` +
                 `🏬 <b>Ombor:</b> ${stockTitle}\n` +
                 `📍 <b>Manzil:</b> ${stockAddress}\n` +
                 `📅 <b>Sana:</b> ${dateStr}\n` +
                 `🕒 <b>Vaqt:</b> ${fromTime} - ${toTime}\n` +
                 `📦 <b>Nakladnoy ID:</b> #${invoiceId}\n` +
                 `🔢 <b>Mavjud slot:</b> ${openSlots.length} ta\n\n` +
-                `⚡ <i>Uzum Seller panelidan zudlik bilan bron qiling!</i>`;
-            await this.sendGroupNotification(slotMessage);
-            this.logger.log(`Time-slot alert sent for shop ${shopId}, invoice ${invoiceId}, slot ${dateStr} ${fromTime}`);
+                `⚡ <i>Bron qilish uchun quyidagi tugmani bosing!</i>`;
+            return { hasSlot: true, message, timeFrom: firstSlot.timeFrom };
         }
         catch (err) {
-            this.logger.error(`checkSlotsForShop error for shopId ${shopId}`, err);
+            this.logger.error(`findOpenSlotInfo error for shopId ${shopId}`, err);
+            return null;
+        }
+    }
+    async checkSlotsForShop(token, shopId) {
+        const info = await this.findOpenSlotInfo(token, shopId);
+        if (!info || !info.hasSlot || !info.message || !info.timeFrom)
+            return;
+        await this.sendSlotAlert(shopId, info.message, info.timeFrom);
+        this.logger.log(`Time-slot alert sent for shop ${shopId}, timeFrom ${info.timeFrom}`);
+    }
+    async sendSlotAlert(shopId, message, timeFrom) {
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: '📥 Bron qilish', callback_data: `book_start:${shopId}:${timeFrom}` }],
+            ],
+        };
+        await this.sendGroupNotification(message, undefined, keyboard);
+    }
+    async deleteAndSend(chatId, messageId, text, replyMarkup) {
+        try {
+            if (this.bot?.deleteMessage) {
+                await this.bot.deleteMessage(chatId, messageId).catch(() => undefined);
+            }
+        }
+        finally {
+            await this.bot?.sendMessage(chatId, text, {
+                parse_mode: 'HTML',
+                ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+            });
+        }
+    }
+    async handleCallbackQuery(query) {
+        if (this.bot?.answerCallbackQuery) {
+            this.bot.answerCallbackQuery(query.id).catch(() => undefined);
+        }
+        const data = query.data || '';
+        const chatId = query.message?.chat?.id;
+        const messageId = query.message?.message_id;
+        if (!chatId || !messageId)
+            return;
+        try {
+            if (data.startsWith('book_start:')) {
+                const [, shopIdStr, timeFromStr] = data.split(':');
+                await this.showInvoiceSelection(chatId, messageId, Number(shopIdStr), Number(timeFromStr));
+            }
+            else if (data.startsWith('book_select:')) {
+                const [, shopIdStr, timeFromStr, invoiceIdStr] = data.split(':');
+                const username = query.from?.username
+                    ? `@${query.from.username}`
+                    : query.from?.first_name || 'Foydalanuvchi';
+                await this.performBooking(chatId, messageId, Number(shopIdStr), Number(timeFromStr), Number(invoiceIdStr), username);
+            }
+            else if (data.startsWith('book_back:')) {
+                const [, shopIdStr] = data.split(':');
+                await this.backToSlotAlert(chatId, messageId, Number(shopIdStr));
+            }
+        }
+        catch (err) {
+            this.logger.error('handleCallbackQuery error', err);
+        }
+    }
+    async showInvoiceSelection(chatId, messageId, shopId, timeFrom) {
+        const token = await this.getUzumToken();
+        if (!token) {
+            await this.deleteAndSend(chatId, messageId, `❌ <i>Uzum token topilmadi.</i>`);
+            return;
+        }
+        try {
+            const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
+            const headers = this.getAuthHeaders(token);
+            const res = await fetch(`${baseUrl}/api/seller/shop/${shopId}/invoice?page=0&size=20`, { headers });
+            if (!res.ok) {
+                await this.deleteAndSend(chatId, messageId, `❌ <i>Nakladnoylarni olishda xatolik yuz berdi.</i>`, { inline_keyboard: [[{ text: '⬅️ Ortga', callback_data: `book_back:${shopId}` }]] });
+                return;
+            }
+            const invoices = await res.json();
+            const bookable = (invoices || []).filter((inv) => !inv.timeSlotReservation && inv.invoiceStatus?.value === 'CREATED');
+            if (bookable.length === 0) {
+                await this.deleteAndSend(chatId, messageId, `<b>📋 BRON QILISH UCHUN NAKLADNOY YO'Q</b>\n\n` +
+                    `❌ <i>Bron qilinmagan va "Yaratilgan" statusidagi nakladnoy topilmadi.</i>`, { inline_keyboard: [[{ text: '⬅️ Ortga', callback_data: `book_back:${shopId}` }]] });
+                return;
+            }
+            const buttons = bookable.map((inv) => [
+                {
+                    text: `#${inv.id} — ${inv.totalToStock ?? 0} dona`,
+                    callback_data: `book_select:${shopId}:${timeFrom}:${inv.id}`,
+                },
+            ]);
+            buttons.push([{ text: '⬅️ Ortga', callback_data: `book_back:${shopId}` }]);
+            const text = `<b>📋 BRON QILISH UCHUN NAKLADNOY TANLANG</b>\n\n` +
+                `🔢 <b>Jami:</b> ${bookable.length} ta nakladnoy\n\n` +
+                `👇 <i>Kerakli nakladnoyni tanlang:</i>`;
+            await this.deleteAndSend(chatId, messageId, text, { inline_keyboard: buttons });
+        }
+        catch (err) {
+            this.logger.error(`showInvoiceSelection error for shopId ${shopId}`, err);
+            await this.deleteAndSend(chatId, messageId, `❌ <i>Xatolik yuz berdi.</i>`);
+        }
+    }
+    async backToSlotAlert(chatId, messageId, shopId) {
+        const token = await this.getUzumToken();
+        if (!token) {
+            await this.deleteAndSend(chatId, messageId, `❌ <i>Uzum token topilmadi.</i>`);
+            return;
+        }
+        const info = await this.findOpenSlotInfo(token, shopId);
+        if (!info || !info.hasSlot || !info.message || !info.timeFrom) {
+            await this.deleteAndSend(chatId, messageId, `<i>Bu do'kon uchun hozircha erkin slot topilmadi.</i>`);
+            return;
+        }
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: '📥 Bron qilish', callback_data: `book_start:${shopId}:${info.timeFrom}` }],
+            ],
+        };
+        await this.deleteAndSend(chatId, messageId, info.message, keyboard);
+    }
+    async performBooking(chatId, messageId, shopId, timeFrom, invoiceId, username) {
+        const token = await this.getUzumToken();
+        if (!token) {
+            await this.deleteAndSend(chatId, messageId, `❌ <i>Uzum token topilmadi.</i>`);
+            return;
+        }
+        try {
+            const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
+            const headers = this.getAuthHeaders(token);
+            const res = await fetch(`${baseUrl}/api/seller/shop/${shopId}/v2/invoice/time-slot/set`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    timeFrom,
+                    invoiceIds: [invoiceId],
+                    stockId: 34,
+                    poolSource: 'FULLFILMENT',
+                }),
+            });
+            const resultData = await res.json().catch(() => null);
+            if (res.ok) {
+                const text = `<b>✅ Muvaffaqiyatli bron qilindi!</b>\n\n` +
+                    `📦 <b>Nakladnoy ID:</b> #${invoiceId}\n` +
+                    `👤 <b>Bron qildi:</b> ${username}`;
+                await this.deleteAndSend(chatId, messageId, text);
+                this.logger.log(`Booking success for invoice ${invoiceId} by ${username}`);
+            }
+            else {
+                const errMsg = resultData?.message || resultData?.error || `HTTP ${res.status}`;
+                const text = `<b>❌ Bron qilishda xatolik!</b>\n\n` +
+                    `📦 <b>Nakladnoy ID:</b> #${invoiceId}\n` +
+                    `👤 <b>Urinish:</b> ${username}\n` +
+                    `⚠️ <b>Xato:</b> ${errMsg}`;
+                await this.deleteAndSend(chatId, messageId, text);
+            }
+        }
+        catch (err) {
+            this.logger.error(`performBooking error for invoice ${invoiceId}`, err);
+            await this.deleteAndSend(chatId, messageId, `❌ <i>Bron qilishda xatolik yuz berdi.</i>`);
         }
     }
     async buildDailyReportMessage() {
@@ -339,7 +518,7 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], BotService.prototype, "handleMonthlyReportCron", null);
 __decorate([
-    (0, schedule_1.Cron)('*/1 * * * *'),
+    (0, schedule_1.Cron)(schedule_1.CronExpression.EVERY_30_SECONDS),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)
