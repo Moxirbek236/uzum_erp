@@ -24,6 +24,12 @@ let BotService = BotService_1 = class BotService {
     constructor(prisma) {
         this.prisma = prisma;
     }
+    onModuleDestroy() {
+        if (this.bot) {
+            this.logger.log('Stopping Telegram Bot polling...');
+            this.bot.stopPolling();
+        }
+    }
     onModuleInit() {
         if (!this.botToken) {
             this.logger.warn('TELEGRAM_BOT_TOKEN is not defined in .env. Bot initialization skipped.');

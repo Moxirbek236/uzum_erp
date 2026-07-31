@@ -1,12 +1,13 @@
-import { OnModuleInit } from '@nestjs/common';
+import { OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../../core/prisma/prisma.service';
-export declare class BotService implements OnModuleInit {
+export declare class BotService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma;
     private readonly logger;
     private bot;
     private readonly botToken;
     private readonly groupChatId;
     constructor(prisma: PrismaService);
+    onModuleDestroy(): void;
     onModuleInit(): void;
     sendGroupNotification(text: string, targetChatId?: string, replyMarkup?: any): Promise<boolean>;
     handleDailyReportCron(): Promise<void>;

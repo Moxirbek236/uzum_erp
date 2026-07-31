@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../core/prisma/prisma.service';
 
@@ -6,13 +6,20 @@ import { PrismaService } from '../../core/prisma/prisma.service';
 const TelegramBot = require('node-telegram-bot-api');
 
 @Injectable()
-export class BotService implements OnModuleInit {
+export class BotService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BotService.name);
   private bot: any = null;
   private readonly botToken = process.env.TELEGRAM_BOT_TOKEN;
   private readonly groupChatId = process.env.TELEGRAM_GROUP_ID || '5157263324';
 
   constructor(private readonly prisma: PrismaService) { }
+
+  onModuleDestroy() {
+    if (this.bot) {
+      this.logger.log('Stopping Telegram Bot polling...');
+      this.bot.stopPolling();
+    }
+  }
 
   onModuleInit() {
     if (!this.botToken) {
