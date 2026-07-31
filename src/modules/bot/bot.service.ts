@@ -56,7 +56,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
 
         for (const shop of shops) {
           try {
-            const info = await this.findOpenSlotInfo(token, shop.uzumShopId);
+            const info = await this.findOpenSlotInfo(token, shop.uzumShopId, undefined, shop.name);
             if (info && info.hasSlot && info.message && info.timeFrom) {
               const keyboard = {
                 inline_keyboard: [
@@ -189,7 +189,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       if (!shops.length) return;
 
       for (const shop of shops) {
-        await this.checkSlotsForShop(token, shop.uzumShopId);
+        await this.checkSlotsForShop(token, shop.uzumShopId, shop.name);
       }
     } finally {
       this.isRunning = false;
@@ -229,7 +229,8 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   private async findOpenSlotInfo(
     token: string,
     shopId: number,
-    daysLimit?: number
+    daysLimit?: number,
+    shopName?: string,
   ): Promise<{ hasSlot: boolean; message?: string; timeFrom?: number } | null> {
     try {
       const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
@@ -322,6 +323,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
 
       const message =
         `<b>🚨 ERKIN TIME-SLOT TOPILDI!</b>\n\n` +
+        `🏪 <b>Do'kon:</b> ${shopName || 'Noma\'lum'}\n` +
         `🏬 <b>Ombor:</b> ${stockTitle}\n` +
         `📍 <b>Manzil:</b> ${stockAddress}\n` +
         `📅 <b>Eng yaqin:</b> ${dateStr} ${fromTime} - ${toTime}\n` +
@@ -340,9 +342,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   // Prevent spam by storing the last alerted timeFrom per shop
   private lastAlertedSlot: Record<number, number> = {};
 
-  private async checkSlotsForShop(token: string, shopId: number) {
+  private async checkSlotsForShop(token: string, shopId: number, shopName: string) {
     // Background cron job faqata 4 kun ichidagi slotlarni tekshiradi
-    const info = await this.findOpenSlotInfo(token, shopId, 4);
+    const info = await this.findOpenSlotInfo(token, shopId, 4, shopName);
     if (!info || !info.hasSlot || !info.message || !info.timeFrom) return;
 
     // Deduplication check: if we already sent an alert for this exact slot, don't spam.
@@ -516,7 +518,8 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const info = await this.findOpenSlotInfo(token, shopId);
+    const shop = await this.prisma.shop.findFirst({ where: { uzumShopId: shopId } });
+    const info = await this.findOpenSlotInfo(token, shopId, undefined, shop?.name);
     if (!info || !info.hasSlot || !info.message || !info.timeFrom) {
       await this.deleteAndSend(
         chatId,

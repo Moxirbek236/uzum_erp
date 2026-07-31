@@ -58,7 +58,7 @@ let BotService = BotService_1 = class BotService {
                 this.bot?.sendMessage(chatId, `🔍 <b>Do'konlar bo'yicha erkin slotlar tekshirilmoqda...</b>`, { parse_mode: 'HTML' });
                 for (const shop of shops) {
                     try {
-                        const info = await this.findOpenSlotInfo(token, shop.uzumShopId);
+                        const info = await this.findOpenSlotInfo(token, shop.uzumShopId, undefined, shop.name);
                         if (info && info.hasSlot && info.message && info.timeFrom) {
                             const keyboard = {
                                 inline_keyboard: [
@@ -155,7 +155,7 @@ let BotService = BotService_1 = class BotService {
             if (!shops.length)
                 return;
             for (const shop of shops) {
-                await this.checkSlotsForShop(token, shop.uzumShopId);
+                await this.checkSlotsForShop(token, shop.uzumShopId, shop.name);
             }
         }
         finally {
@@ -181,7 +181,7 @@ let BotService = BotService_1 = class BotService {
         });
         return firstUser?.uzumToken || null;
     }
-    async findOpenSlotInfo(token, shopId, daysLimit) {
+    async findOpenSlotInfo(token, shopId, daysLimit, shopName) {
         try {
             const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
             const headers = this.getAuthHeaders(token);
@@ -250,6 +250,7 @@ let BotService = BotService_1 = class BotService {
                 slotsList += `  └ ... va yana ${openSlots.length - 3} ta slot\n`;
             }
             const message = `<b>🚨 ERKIN TIME-SLOT TOPILDI!</b>\n\n` +
+                `🏪 <b>Do'kon:</b> ${shopName || 'Noma\'lum'}\n` +
                 `🏬 <b>Ombor:</b> ${stockTitle}\n` +
                 `📍 <b>Manzil:</b> ${stockAddress}\n` +
                 `📅 <b>Eng yaqin:</b> ${dateStr} ${fromTime} - ${toTime}\n` +
@@ -265,8 +266,8 @@ let BotService = BotService_1 = class BotService {
         }
     }
     lastAlertedSlot = {};
-    async checkSlotsForShop(token, shopId) {
-        const info = await this.findOpenSlotInfo(token, shopId, 4);
+    async checkSlotsForShop(token, shopId, shopName) {
+        const info = await this.findOpenSlotInfo(token, shopId, 4, shopName);
         if (!info || !info.hasSlot || !info.message || !info.timeFrom)
             return;
         if (this.lastAlertedSlot[shopId] === info.timeFrom) {
@@ -371,7 +372,8 @@ let BotService = BotService_1 = class BotService {
             await this.deleteAndSend(chatId, messageId, `❌ <i>Uzum token topilmadi.</i>`);
             return;
         }
-        const info = await this.findOpenSlotInfo(token, shopId);
+        const shop = await this.prisma.shop.findFirst({ where: { uzumShopId: shopId } });
+        const info = await this.findOpenSlotInfo(token, shopId, undefined, shop?.name);
         if (!info || !info.hasSlot || !info.message || !info.timeFrom) {
             await this.deleteAndSend(chatId, messageId, `<i>Bu do'kon uchun hozircha erkin slot topilmadi.</i>`);
             return;
