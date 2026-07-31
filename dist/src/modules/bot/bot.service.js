@@ -259,7 +259,7 @@ let BotService = BotService_1 = class BotService {
         }
     }
     async checkSlotsForShop(token, shopId) {
-        const info = await this.findOpenSlotInfo(token, shopId, 3);
+        const info = await this.findOpenSlotInfo(token, shopId, 7);
         if (!info || !info.hasSlot || !info.message || !info.timeFrom)
             return;
         await this.sendSlotAlert(shopId, info.message, info.timeFrom);
