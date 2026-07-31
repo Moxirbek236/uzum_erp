@@ -175,7 +175,7 @@ let BotService = BotService_1 = class BotService {
         });
         return firstUser?.uzumToken || null;
     }
-    async findOpenSlotInfo(token, shopId) {
+    async findOpenSlotInfo(token, shopId, daysLimit) {
         try {
             const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
             const headers = this.getAuthHeaders(token);
@@ -207,11 +207,10 @@ let BotService = BotService_1 = class BotService {
                 return { hasSlot: false };
             const reservedFrom = latestInvoice.timeSlotReservation?.timeFrom;
             const now = Date.now();
-            const rangeEnd = now + 7 * 24 * 60 * 60 * 1000;
             const openSlots = timeSlots
                 .filter((s) => s.timeFrom !== reservedFrom &&
                 s.timeFrom >= now &&
-                s.timeFrom <= rangeEnd)
+                (!daysLimit || s.timeFrom <= now + daysLimit * 24 * 60 * 60 * 1000))
                 .sort((a, b) => a.timeFrom - b.timeFrom);
             if (openSlots.length === 0)
                 return { hasSlot: false };
@@ -231,13 +230,26 @@ let BotService = BotService_1 = class BotService {
                 hour: '2-digit',
                 minute: '2-digit',
             });
+            let slotsList = '';
+            openSlots.slice(0, 5).forEach((s, i) => {
+                const sFrom = new Date(s.timeFrom);
+                const sTo = new Date(s.timeTo);
+                const sDateStr = sFrom.toLocaleDateString('uz-UZ', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                const sFromTime = sFrom.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' });
+                const sToTime = sTo.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' });
+                const prefix = i === openSlots.slice(0, 5).length - 1 && openSlots.length <= 5 ? '  └' : '  ├';
+                slotsList += `${prefix} ✅ ${sDateStr} ${sFromTime} - ${sToTime}\n`;
+            });
+            if (openSlots.length > 5) {
+                slotsList += `  └ ... va yana ${openSlots.length - 5} ta slot\n`;
+            }
             const message = `<b>🚨 ERKIN TIME-SLOT TOPILDI!</b>\n\n` +
                 `🏬 <b>Ombor:</b> ${stockTitle}\n` +
                 `📍 <b>Manzil:</b> ${stockAddress}\n` +
-                `📅 <b>Sana:</b> ${dateStr}\n` +
-                `🕒 <b>Vaqt:</b> ${fromTime} - ${toTime}\n` +
+                `📅 <b>Eng yaqin:</b> ${dateStr} ${fromTime} - ${toTime}\n` +
                 `📦 <b>Nakladnoy ID:</b> #${invoiceId}\n` +
-                `🔢 <b>Mavjud slot:</b> ${openSlots.length} ta\n\n` +
+                `🔢 <b>Mavjud slot:</b> ${openSlots.length} ta\n` +
+                `${slotsList}\n` +
                 `⚡ <i>Bron qilish uchun quyidagi tugmani bosing!</i>`;
             return { hasSlot: true, message, timeFrom: firstSlot.timeFrom };
         }
@@ -247,7 +259,7 @@ let BotService = BotService_1 = class BotService {
         }
     }
     async checkSlotsForShop(token, shopId) {
-        const info = await this.findOpenSlotInfo(token, shopId);
+        const info = await this.findOpenSlotInfo(token, shopId, 3);
         if (!info || !info.hasSlot || !info.message || !info.timeFrom)
             return;
         await this.sendSlotAlert(shopId, info.message, info.timeFrom);
