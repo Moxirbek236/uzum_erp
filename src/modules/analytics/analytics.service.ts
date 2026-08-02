@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../core/prisma/prisma.service';
 
 import { ReviewsService } from '../reviews/reviews.service';
@@ -15,6 +16,26 @@ export class AnalyticsService {
     private readonly financeService: FinanceService,
     private readonly uzumAuthService: UzumAuthService,
   ) {}
+
+  private readonly logger = new Logger(AnalyticsService.name);
+
+  @Cron('0 0,12 * * *') // Runs twice a day: at 00:00 and 12:00
+  async handleDailySync() {
+    this.logger.log('Starting automated daily Uzum API sync for all active users...');
+    try {
+      const users = await this.prisma.user.findMany({
+        where: { uzumToken: { not: null } },
+      });
+
+      for (const user of users) {
+        this.logger.log(`Syncing data for user ${user.id}...`);
+        await this.triggerUzumSync(user.id);
+      }
+      this.logger.log('Automated daily Uzum API sync completed successfully.');
+    } catch (err) {
+      this.logger.error('Error during automated daily Uzum API sync:', err);
+    }
+  }
 
   async triggerUzumSync(userId: string) {
     let user = await this.prisma.user.findUnique({

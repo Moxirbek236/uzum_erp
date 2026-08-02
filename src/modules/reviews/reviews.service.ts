@@ -196,7 +196,8 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
       });
 
       if (!res.ok) {
-        this.logger.warn(`Uzum review reply create returned status ${res.status}`);
+        const errorText = await res.text();
+        this.logger.warn(`Uzum review reply create returned status ${res.status}. Body: ${errorText}`);
         return false;
       }
 
@@ -245,19 +246,23 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
     const { aiReply } = await this.generateAiReply(unrepliedReview.id);
 
     // Send real reply to Uzum API
-    await this.sendReplyToUzum(firstUser.uzumToken, unrepliedReview.id, aiReply);
+    const isSuccess = await this.sendReplyToUzum(firstUser.uzumToken, unrepliedReview.id, aiReply);
 
-    // Update local DB status
-    await this.prisma.review.update({
-      where: { id: unrepliedReview.id },
-      data: {
-        replyStatus: 'REPLIED',
-        aiReply: aiReply,
-        isRead: true,
-      },
-    });
+    if (isSuccess) {
+      // Update local DB status only if successful
+      await this.prisma.review.update({
+        where: { id: unrepliedReview.id },
+        data: {
+          replyStatus: 'REPLIED',
+          aiReply: aiReply,
+          isRead: true,
+        },
+      });
 
-    this.logger.log(`AUTO_REPLY successfully sent AI reply for review #${unrepliedReview.id}`);
+      this.logger.log(`AUTO_REPLY successfully sent AI reply for review #${unrepliedReview.id}`);
+    } else {
+      this.logger.warn(`AUTO_REPLY failed to send AI reply for review #${unrepliedReview.id}`);
+    }
   }
 
   async syncReviewsFromUzum(token: string) {
