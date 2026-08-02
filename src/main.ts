@@ -11,6 +11,9 @@ dns.setDefaultResultOrder('ipv4first');
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  // Enable shutdown hooks so that onModuleDestroy is called on SIGTERM (used by Render)
+  app.enableShutdownHooks();
+
   app.enableCors({
     origin: [
       'http://localhost:3000',

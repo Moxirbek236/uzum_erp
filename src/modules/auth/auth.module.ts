@@ -11,7 +11,7 @@ import { UzumIntegrationModule } from '../uzum-integration/uzum-integration.modu
     PassportModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'super-secret',
-      signOptions: { expiresIn: '15m' },
+      signOptions: { expiresIn: '30d' },
     }),
     UzumIntegrationModule,
   ],
