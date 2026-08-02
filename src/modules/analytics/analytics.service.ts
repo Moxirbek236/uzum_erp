@@ -110,42 +110,68 @@ export class AnalyticsService {
       },
     });
 
-    // 4. Dynamic order counts and revenue aggregation from DB
+    // 4. Dynamic order counts from DB
     const totalOrders = await this.prisma.order.count({
       where: whereShop,
     });
-
-    const revenueAggregate = await this.prisma.order.aggregate({
-      where: whereShop,
-      _sum: {
-        sellPrice: true,
-      },
+    
+    const successfulOrders = await this.prisma.order.count({
+      where: { ...whereShop, status: 'TO_WITHDRAW' }
+    });
+    
+    const canceledOrders = await this.prisma.order.count({
+      where: { ...whereShop, status: 'CANCELED' }
+    });
+    
+    const processingOrders = await this.prisma.order.count({
+      where: { ...whereShop, status: 'PROCESSING' }
     });
 
-    const totalRevenue = revenueAggregate._sum.sellPrice || 0;
+    // We use actual Uzum Balance for Dashboard "Total Revenue"
+    const financeSummariesAll = await this.prisma.financeSummary.findMany({
+      where: whereShop,
+    });
+    
+    let totalRevenue = 0;
+    for (const fs of financeSummariesAll) {
+      totalRevenue += fs.commonBalance;
+    }
 
-    // 5. Generate Sales Chart (Last 7 days)
+    // 5. Generate Sales Chart (Last 30 days) from Real API Data
+    const summaries = await this.prisma.financeSummary.findMany({
+      where: whereShop,
+      select: { salesChartData: true }
+    });
+
+    const salesChartMap = new Map<string, number>();
+
+    for (const summary of summaries) {
+      if (summary.salesChartData && Array.isArray(summary.salesChartData)) {
+        const chartData = summary.salesChartData as any[];
+        for (const item of chartData) {
+          const rawDate = item['Sales.created_at.day'];
+          const salesStr = item['Sales.gmv_purchased_after_returns_measure'];
+          if (rawDate && salesStr) {
+            const dateObj = new Date(rawDate);
+            const dateLabel = dateObj.toLocaleDateString('uz-UZ', { month: 'short', day: 'numeric' });
+            const val = parseFloat(salesStr);
+            const current = salesChartMap.get(dateLabel) || 0;
+            salesChartMap.set(dateLabel, current + val);
+          }
+        }
+      }
+    }
+
     const salesChart = [];
     const today = new Date();
-    for (let i = 6; i >= 0; i--) {
+    for (let i = 29; i >= 0; i--) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
-      const startOfDay = new Date(d.setHours(0, 0, 0, 0));
-      const endOfDay = new Date(d.setHours(23, 59, 59, 999));
-      
-      const dayOrders = await this.prisma.order.aggregate({
-        where: {
-          ...whereShop,
-          updatedAt: { gte: startOfDay, lte: endOfDay }
-        },
-        _sum: { sellPrice: true },
-        _count: { id: true }
-      });
-      
+      const dateLabel = d.toLocaleDateString('uz-UZ', { month: 'short', day: 'numeric' });
       salesChart.push({
-        date: startOfDay.toLocaleDateString('uz-UZ', { month: 'short', day: 'numeric' }),
-        sales: dayOrders._sum.sellPrice || 0,
-        orders: dayOrders._count.id || 0,
+        date: dateLabel,
+        sales: salesChartMap.get(dateLabel) || 0,
+        orders: 0,
       });
     }
 
@@ -182,6 +208,9 @@ export class AnalyticsService {
         totalRevenue,
         revenueGrowth: 0,
         totalOrders,
+        successfulOrders,
+        canceledOrders,
+        processingOrders,
         ordersGrowth: 0,
         totalProducts,
         lowStockProducts,

@@ -116,6 +116,42 @@ export class FinanceService {
             if (shopRes.ok) {
               const sData = await shopRes.json();
               const sPayload = sData.payload || {};
+
+              // Fetch Sales Chart Data from Analytics CubeJS API
+              let salesChartData = null;
+              try {
+                const queryObj = {
+                  timezone: 'Asia/Tashkent',
+                  measures: ['Sales.gmv_purchased_after_returns_measure'],
+                  dimensions: ['Sales.shop_id'],
+                  timeDimensions: [
+                    {
+                      dimension: 'Sales.created_at',
+                      dateRange: 'from 30 days ago to now',
+                      granularity: 'day'
+                    }
+                  ],
+                  filters: [
+                    {
+                      member: 'Sales.shop_id',
+                      operator: 'equals',
+                      values: [String(shop.uzumShopId)]
+                    }
+                  ]
+                };
+                const encodedQuery = encodeURIComponent(JSON.stringify(queryObj));
+                const cubeUrl = `https://analytics-seller.uzum.uz/cubejs-api/v1/load?query=${encodedQuery}&queryType=multi`;
+                const cubeRes = await fetch(cubeUrl, { headers });
+                if (cubeRes.ok) {
+                  const cubeData = await cubeRes.json();
+                  if (cubeData.results && cubeData.results.length > 0) {
+                    salesChartData = cubeData.results[0].data;
+                  }
+                }
+              } catch (e) {
+                this.logger.error(`Failed to fetch analytics for shop ${shop.uzumShopId}`, e);
+              }
+
               await this.prisma.financeSummary.upsert({
                 where: { shopId: shop.uzumShopId },
                 update: {
@@ -126,6 +162,7 @@ export class FinanceService {
                   urgentWithdrawAllowed: sPayload.urgentWithdrawInfo?.allowed || false,
                   urgentWithdrawSum: sPayload.urgentWithdrawInfo?.forWithdrawalSum || 0,
                   expenses: sPayload.balanceStatisticInfo?.expensesStatementDetail?.expenses || [],
+                  salesChartData: salesChartData || undefined,
                 },
                 create: {
                   shopId: shop.uzumShopId,
@@ -136,6 +173,7 @@ export class FinanceService {
                   urgentWithdrawAllowed: sPayload.urgentWithdrawInfo?.allowed || false,
                   urgentWithdrawSum: sPayload.urgentWithdrawInfo?.forWithdrawalSum || 0,
                   expenses: sPayload.balanceStatisticInfo?.expensesStatementDetail?.expenses || [],
+                  salesChartData: salesChartData || undefined,
                 }
               });
             }
@@ -148,43 +186,74 @@ export class FinanceService {
       // 2. Sync Finance Orders
       for (const shop of shops) {
         try {
-          // We will fetch the first 100 recent orders to keep it synced
-          const ordersUrl = `${baseUrl}/api/seller/finance/orders?size=100&page=0&shopIds=${shop.uzumShopId}`;
-          const res = await fetch(ordersUrl, { headers });
-          if (!res.ok) continue;
-
-          const data = await res.json();
-          const orderItems = data.orderItems || [];
-
+          let page = 0;
+          let hasMore = true;
           let synced = 0;
-          for (const item of orderItems) {
-            const orderIdStr = String(item.id);
-            await this.prisma.order.upsert({
-              where: { id: orderIdStr },
-              update: {
-                status: item.status || 'COMPLETED',
-                sellPrice: item.sellPrice || 0,
-                sellerProfit: item.sellerProfit || 0,
-                commission: item.commission || 0,
-                purchasePrice: item.purchasePrice || 0,
-                logisticDeliveryFee: item.logisticDeliveryFee || 0,
-                amountReturns: item.amountReturns || 0,
-                productTitle: item.productTitle || 'Unknown',
-              },
-              create: {
-                id: orderIdStr,
-                shopId: shop.uzumShopId,
-                status: item.status || 'COMPLETED',
-                sellPrice: item.sellPrice || 0,
-                sellerProfit: item.sellerProfit || 0,
-                commission: item.commission || 0,
-                purchasePrice: item.purchasePrice || 0,
-                logisticDeliveryFee: item.logisticDeliveryFee || 0,
-                amountReturns: item.amountReturns || 0,
-                productTitle: item.productTitle || 'Unknown',
-              }
-            });
-            synced++;
+          const size = 1000000; // Use max size as Uzum allows it for faster fetching
+
+          while (hasMore) {
+            const ordersUrl = `${baseUrl}/api/seller/finance/orders?size=${size}&page=${page}&shopIds=${shop.uzumShopId}`;
+            const res = await fetch(ordersUrl, { headers });
+            if (!res.ok) {
+              hasMore = false;
+              break;
+            }
+
+            const data = await res.json();
+            const orderItems = data.orderItems || [];
+            
+            if (orderItems.length === 0) {
+              hasMore = false;
+              break;
+            }
+
+            for (const item of orderItems) {
+              const orderIdStr = String(item.id);
+              await this.prisma.order.upsert({
+                where: { id: orderIdStr },
+                update: {
+                  status: item.status || 'COMPLETED',
+                  sellPrice: item.sellPrice || 0,
+                  sellerProfit: item.sellerProfit || 0,
+                  commission: item.commission || 0,
+                  purchasePrice: item.purchasePrice || 0,
+                  logisticDeliveryFee: item.logisticDeliveryFee || 0,
+                  amountReturns: item.amountReturns || 0,
+                  productTitle: item.productTitle || 'Unknown',
+                  orderedAt: item.date ? new Date(item.date) : null,
+                  uzumOrderId: item.orderId ? String(item.orderId) : null,
+                  skuTitle: item.skuTitle || null,
+                  productId: item.productId || null,
+                  photoKey: item.productImage?.photoKey || null,
+                  amount: item.amount || 1,
+                },
+                create: {
+                  id: orderIdStr,
+                  shopId: shop.uzumShopId,
+                  status: item.status || 'COMPLETED',
+                  sellPrice: item.sellPrice || 0,
+                  sellerProfit: item.sellerProfit || 0,
+                  commission: item.commission || 0,
+                  purchasePrice: item.purchasePrice || 0,
+                  logisticDeliveryFee: item.logisticDeliveryFee || 0,
+                  amountReturns: item.amountReturns || 0,
+                  productTitle: item.productTitle || 'Unknown',
+                  orderedAt: item.date ? new Date(item.date) : null,
+                  uzumOrderId: item.orderId ? String(item.orderId) : null,
+                  skuTitle: item.skuTitle || null,
+                  productId: item.productId || null,
+                  photoKey: item.productImage?.photoKey || null,
+                  amount: item.amount || 1,
+                }
+              });
+            }
+            synced += orderItems.length;
+
+            if (orderItems.length < size) {
+              hasMore = false;
+            } else {
+              page++;
+            }
           }
           this.logger.log(`Synced ${synced} finance orders for shop ${shop.uzumShopId}`);
         } catch (e) {

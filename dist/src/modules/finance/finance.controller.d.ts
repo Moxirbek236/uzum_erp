@@ -16,9 +16,8 @@ export declare class FinanceController {
             size: number;
             items: {
                 id: string;
-                createdAt: Date;
-                updatedAt: Date;
                 shopId: number;
+                updatedAt: Date;
                 status: string;
                 sellPrice: number;
                 sellerProfit: number;
@@ -27,6 +26,13 @@ export declare class FinanceController {
                 logisticDeliveryFee: number;
                 amountReturns: number;
                 productTitle: string;
+                orderedAt: Date | null;
+                uzumOrderId: string | null;
+                skuTitle: string | null;
+                productId: number | null;
+                photoKey: string | null;
+                amount: number;
+                createdAt: Date;
             }[];
         };
     }>;

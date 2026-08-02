@@ -177,7 +177,12 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
                 body: JSON.stringify(payload),
             });
             if (!res.ok) {
-                this.logger.warn(`Uzum review reply create returned status ${res.status}`);
+                const errorText = await res.text();
+                this.logger.warn(`Uzum review reply create returned status ${res.status}. Body: ${errorText}`);
+                if (errorText.includes('has reply') || errorText.includes('feedback-001')) {
+                    this.logger.log(`Review #${reviewIdStr} is already replied on Uzum. Treating as success to update local DB.`);
+                    return true;
+                }
                 return false;
             }
             this.logger.log(`Uzum review reply create successful for #${reviewIdStr}`);
@@ -210,16 +215,21 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
             return;
         }
         const { aiReply } = await this.generateAiReply(unrepliedReview.id);
-        await this.sendReplyToUzum(firstUser.uzumToken, unrepliedReview.id, aiReply);
-        await this.prisma.review.update({
-            where: { id: unrepliedReview.id },
-            data: {
-                replyStatus: 'REPLIED',
-                aiReply: aiReply,
-                isRead: true,
-            },
-        });
-        this.logger.log(`AUTO_REPLY successfully sent AI reply for review #${unrepliedReview.id}`);
+        const isSuccess = await this.sendReplyToUzum(firstUser.uzumToken, unrepliedReview.id, aiReply);
+        if (isSuccess) {
+            await this.prisma.review.update({
+                where: { id: unrepliedReview.id },
+                data: {
+                    replyStatus: 'REPLIED',
+                    aiReply: aiReply,
+                    isRead: true,
+                },
+            });
+            this.logger.log(`AUTO_REPLY successfully sent AI reply for review #${unrepliedReview.id}`);
+        }
+        else {
+            this.logger.warn(`AUTO_REPLY failed to send AI reply for review #${unrepliedReview.id}`);
+        }
     }
     async syncReviewsFromUzum(token) {
         try {
@@ -235,17 +245,36 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
             else {
                 headers['Authorization'] = `Bearer ${token}`;
             }
-            const res = await fetch(`${baseUrl}/api/seller/product-reviews?page=0&size=50`, {
+            const resAll = await fetch(`${baseUrl}/api/seller/product-reviews?page=0&size=50`, {
                 method: 'POST',
                 headers,
                 body: JSON.stringify({ filter: 'ALL' }),
             });
-            if (!res.ok) {
-                this.logger.warn(`Uzum reviews API returned status ${res.status}`);
-                return;
+            const resNoReply = await fetch(`${baseUrl}/api/seller/product-reviews?page=0&size=50`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ filter: 'NO_REPLY' }),
+            });
+            let reviews = [];
+            if (resAll.ok) {
+                const dataAll = await resAll.json();
+                if (dataAll?.payload)
+                    reviews = [...reviews, ...dataAll.payload];
             }
-            const data = await res.json();
-            const reviews = data?.payload || [];
+            else {
+                this.logger.warn(`Uzum reviews ALL API returned status ${resAll.status}`);
+            }
+            if (resNoReply.ok) {
+                const dataNoReply = await resNoReply.json();
+                if (dataNoReply?.payload)
+                    reviews = [...reviews, ...dataNoReply.payload];
+            }
+            else {
+                this.logger.warn(`Uzum reviews NO_REPLY API returned status ${resNoReply.status}`);
+            }
+            const uniqueReviewsMap = new Map();
+            reviews.forEach(r => uniqueReviewsMap.set(r.reviewId || r.id, r));
+            reviews = Array.from(uniqueReviewsMap.values());
             if (Array.isArray(reviews) && reviews.length > 0) {
                 for (const item of reviews) {
                     const reviewId = String(item.reviewId || item.id);

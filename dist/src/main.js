@@ -8,6 +8,7 @@ const dns = require('node:dns');
 dns.setDefaultResultOrder('ipv4first');
 async function bootstrap() {
     const app = await core_1.NestFactory.create(app_module_1.AppModule);
+    app.enableShutdownHooks();
     app.enableCors({
         origin: [
             'http://localhost:3000',

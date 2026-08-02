@@ -101,7 +101,7 @@ let AuthService = class AuthService {
         }
         const payload = { sub: user.id, phone: user.phone, role: user.role };
         return {
-            accessToken: this.jwtService.sign(payload, { expiresIn: '15m' }),
+            accessToken: this.jwtService.sign(payload, { expiresIn: '30d' }),
             refreshToken: this.jwtService.sign(payload, { expiresIn: '30d' }),
             user: {
                 id: user.id,

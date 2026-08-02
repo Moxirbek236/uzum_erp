@@ -23,7 +23,7 @@ exports.AuthModule = AuthModule = __decorate([
             passport_1.PassportModule,
             jwt_1.JwtModule.register({
                 secret: process.env.JWT_SECRET || 'super-secret',
-                signOptions: { expiresIn: '15m' },
+                signOptions: { expiresIn: '30d' },
             }),
             uzum_integration_module_1.UzumIntegrationModule,
         ],

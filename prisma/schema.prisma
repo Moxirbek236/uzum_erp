@@ -106,6 +106,12 @@ model Order {
   logisticDeliveryFee Float    @default(0)
   amountReturns       Float    @default(0)
   productTitle        String
+  orderedAt           DateTime?
+  uzumOrderId         String?
+  skuTitle            String?
+  productId           Int?
+  photoKey            String?
+  amount              Int      @default(1)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 }
@@ -120,6 +126,7 @@ model FinanceSummary {
   urgentWithdrawAllowed Boolean  @default(false)
   urgentWithdrawSum     Float    @default(0)
   expenses              Json?
+  salesChartData        Json?
   updatedAt             DateTime @updatedAt
 }
 

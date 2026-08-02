@@ -198,6 +198,13 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
       if (!res.ok) {
         const errorText = await res.text();
         this.logger.warn(`Uzum review reply create returned status ${res.status}. Body: ${errorText}`);
+        
+        // Agar allaqachon javob berilgan bo'lsa (Uzum kabinetidan yozilgan bo'lsa), DB da ham REPLIED qilib belgilash uchun true qaytaramiz
+        if (errorText.includes('has reply') || errorText.includes('feedback-001')) {
+          this.logger.log(`Review #${reviewIdStr} is already replied on Uzum. Treating as success to update local DB.`);
+          return true;
+        }
+
         return false;
       }
 
@@ -281,19 +288,38 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      const res = await fetch(`${baseUrl}/api/seller/product-reviews?page=0&size=50`, {
+      const resAll = await fetch(`${baseUrl}/api/seller/product-reviews?page=0&size=50`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ filter: 'ALL' }),
       });
 
-      if (!res.ok) {
-        this.logger.warn(`Uzum reviews API returned status ${res.status}`);
-        return;
+      const resNoReply = await fetch(`${baseUrl}/api/seller/product-reviews?page=0&size=50`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ filter: 'NO_REPLY' }),
+      });
+
+      let reviews: any[] = [];
+      
+      if (resAll.ok) {
+        const dataAll = await resAll.json();
+        if (dataAll?.payload) reviews = [...reviews, ...dataAll.payload];
+      } else {
+        this.logger.warn(`Uzum reviews ALL API returned status ${resAll.status}`);
       }
 
-      const data = await res.json();
-      const reviews = data?.payload || [];
+      if (resNoReply.ok) {
+        const dataNoReply = await resNoReply.json();
+        if (dataNoReply?.payload) reviews = [...reviews, ...dataNoReply.payload];
+      } else {
+        this.logger.warn(`Uzum reviews NO_REPLY API returned status ${resNoReply.status}`);
+      }
+
+      // Deduplicate reviews by ID
+      const uniqueReviewsMap = new Map();
+      reviews.forEach(r => uniqueReviewsMap.set(r.reviewId || r.id, r));
+      reviews = Array.from(uniqueReviewsMap.values());
 
       if (Array.isArray(reviews) && reviews.length > 0) {
         for (const item of reviews) {

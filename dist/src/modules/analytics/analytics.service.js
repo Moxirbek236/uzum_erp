@@ -8,15 +8,17 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var AnalyticsService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AnalyticsService = void 0;
 const common_1 = require("@nestjs/common");
+const schedule_1 = require("@nestjs/schedule");
 const prisma_service_1 = require("../../core/prisma/prisma.service");
 const reviews_service_1 = require("../reviews/reviews.service");
 const products_service_1 = require("../products/products.service");
 const finance_service_1 = require("../finance/finance.service");
 const uzum_auth_service_1 = require("../uzum-integration/uzum-auth/uzum-auth.service");
-let AnalyticsService = class AnalyticsService {
+let AnalyticsService = AnalyticsService_1 = class AnalyticsService {
     prisma;
     reviewsService;
     productsService;
@@ -28,6 +30,23 @@ let AnalyticsService = class AnalyticsService {
         this.productsService = productsService;
         this.financeService = financeService;
         this.uzumAuthService = uzumAuthService;
+    }
+    logger = new common_1.Logger(AnalyticsService_1.name);
+    async handleDailySync() {
+        this.logger.log('Starting automated daily Uzum API sync for all active users...');
+        try {
+            const users = await this.prisma.user.findMany({
+                where: { uzumToken: { not: null } },
+            });
+            for (const user of users) {
+                this.logger.log(`Syncing data for user ${user.id}...`);
+                await this.triggerUzumSync(user.id);
+            }
+            this.logger.log('Automated daily Uzum API sync completed successfully.');
+        }
+        catch (err) {
+            this.logger.error('Error during automated daily Uzum API sync:', err);
+        }
     }
     async triggerUzumSync(userId) {
         let user = await this.prisma.user.findUnique({
@@ -82,32 +101,53 @@ let AnalyticsService = class AnalyticsService {
         const totalOrders = await this.prisma.order.count({
             where: whereShop,
         });
-        const revenueAggregate = await this.prisma.order.aggregate({
-            where: whereShop,
-            _sum: {
-                sellPrice: true,
-            },
+        const successfulOrders = await this.prisma.order.count({
+            where: { ...whereShop, status: 'TO_WITHDRAW' }
         });
-        const totalRevenue = revenueAggregate._sum.sellPrice || 0;
+        const canceledOrders = await this.prisma.order.count({
+            where: { ...whereShop, status: 'CANCELED' }
+        });
+        const processingOrders = await this.prisma.order.count({
+            where: { ...whereShop, status: 'PROCESSING' }
+        });
+        const financeSummariesAll = await this.prisma.financeSummary.findMany({
+            where: whereShop,
+        });
+        let totalRevenue = 0;
+        for (const fs of financeSummariesAll) {
+            totalRevenue += fs.commonBalance;
+        }
+        const summaries = await this.prisma.financeSummary.findMany({
+            where: whereShop,
+            select: { salesChartData: true }
+        });
+        const salesChartMap = new Map();
+        for (const summary of summaries) {
+            if (summary.salesChartData && Array.isArray(summary.salesChartData)) {
+                const chartData = summary.salesChartData;
+                for (const item of chartData) {
+                    const rawDate = item['Sales.created_at.day'];
+                    const salesStr = item['Sales.gmv_purchased_after_returns_measure'];
+                    if (rawDate && salesStr) {
+                        const dateObj = new Date(rawDate);
+                        const dateLabel = dateObj.toLocaleDateString('uz-UZ', { month: 'short', day: 'numeric' });
+                        const val = parseFloat(salesStr);
+                        const current = salesChartMap.get(dateLabel) || 0;
+                        salesChartMap.set(dateLabel, current + val);
+                    }
+                }
+            }
+        }
         const salesChart = [];
         const today = new Date();
-        for (let i = 6; i >= 0; i--) {
+        for (let i = 29; i >= 0; i--) {
             const d = new Date(today);
             d.setDate(d.getDate() - i);
-            const startOfDay = new Date(d.setHours(0, 0, 0, 0));
-            const endOfDay = new Date(d.setHours(23, 59, 59, 999));
-            const dayOrders = await this.prisma.order.aggregate({
-                where: {
-                    ...whereShop,
-                    updatedAt: { gte: startOfDay, lte: endOfDay }
-                },
-                _sum: { sellPrice: true },
-                _count: { id: true }
-            });
+            const dateLabel = d.toLocaleDateString('uz-UZ', { month: 'short', day: 'numeric' });
             salesChart.push({
-                date: startOfDay.toLocaleDateString('uz-UZ', { month: 'short', day: 'numeric' }),
-                sales: dayOrders._sum.sellPrice || 0,
-                orders: dayOrders._count.id || 0,
+                date: dateLabel,
+                sales: salesChartMap.get(dateLabel) || 0,
+                orders: 0,
             });
         }
         const recentAlerts = [];
@@ -139,6 +179,9 @@ let AnalyticsService = class AnalyticsService {
                 totalRevenue,
                 revenueGrowth: 0,
                 totalOrders,
+                successfulOrders,
+                canceledOrders,
+                processingOrders,
                 ordersGrowth: 0,
                 totalProducts,
                 lowStockProducts,
@@ -151,7 +194,13 @@ let AnalyticsService = class AnalyticsService {
     }
 };
 exports.AnalyticsService = AnalyticsService;
-exports.AnalyticsService = AnalyticsService = __decorate([
+__decorate([
+    (0, schedule_1.Cron)('0 0,12 * * *'),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], AnalyticsService.prototype, "handleDailySync", null);
+exports.AnalyticsService = AnalyticsService = AnalyticsService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_1.PrismaService,
         reviews_service_1.ReviewsService,

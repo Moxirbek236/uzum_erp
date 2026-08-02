@@ -10,6 +10,8 @@ export declare class AnalyticsService {
     private readonly financeService;
     private readonly uzumAuthService;
     constructor(prisma: PrismaService, reviewsService: ReviewsService, productsService: ProductsService, financeService: FinanceService, uzumAuthService: UzumAuthService);
+    private readonly logger;
+    handleDailySync(): Promise<void>;
     triggerUzumSync(userId: string): Promise<{
         success: boolean;
         message: string;
@@ -19,6 +21,9 @@ export declare class AnalyticsService {
             totalRevenue: number;
             revenueGrowth: number;
             totalOrders: number;
+            successfulOrders: number;
+            canceledOrders: number;
+            processingOrders: number;
             ordersGrowth: number;
             totalProducts: number;
             lowStockProducts: number;

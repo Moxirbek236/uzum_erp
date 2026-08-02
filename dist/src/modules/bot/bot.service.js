@@ -427,40 +427,56 @@ let BotService = BotService_1 = class BotService {
         }
     }
     async buildDailyReportMessage() {
-        const today = new Date().toLocaleDateString('uz-UZ');
-        const [shopsCount, productsCount, unreadReviewsCount, totalOrders] = await Promise.all([
+        const today = new Date();
+        const startOfDay = new Date(today.setHours(0, 0, 0, 0));
+        const endOfDay = new Date(today.setHours(23, 59, 59, 999));
+        const todayStr = new Date().toLocaleDateString('uz-UZ');
+        const [shopsCount, productsCount, unreadReviewsCount, totalOrdersToday] = await Promise.all([
             this.prisma.shop.count(),
             this.prisma.product.count(),
             this.prisma.review.count({ where: { isRead: false } }),
-            this.prisma.order.count(),
+            this.prisma.order.count({ where: { orderedAt: { gte: startOfDay, lte: endOfDay } } }),
         ]);
         const revenueAggregate = await this.prisma.order.aggregate({
+            where: { orderedAt: { gte: startOfDay, lte: endOfDay } },
             _sum: { sellPrice: true },
         });
-        const revenue = revenueAggregate._sum?.sellPrice || 0;
+        const revenueToday = revenueAggregate._sum?.sellPrice || 0;
+        const financeSummaries = await this.prisma.financeSummary.findMany();
+        let totalBalance = 0;
+        financeSummaries.forEach(f => totalBalance += f.commonBalance);
         return `<b>📊 KUNLIK YAKUNIY HISOBOT (Uzum ERP)</b>\n` +
-            `📅 <b>Sana:</b> ${today}\n\n` +
-            `💰 <b>Jami Tushum:</b> ${new Intl.NumberFormat('uz-UZ').format(revenue)} UZS\n` +
-            `📦 <b>Jami Buyurtmalar:</b> ${totalOrders} ta\n` +
+            `📅 <b>Sana:</b> ${todayStr}\n\n` +
+            `📈 <b>Bugungi Savdo:</b> ${new Intl.NumberFormat('uz-UZ').format(revenueToday)} UZS\n` +
+            `📦 <b>Bugungi Buyurtmalar:</b> ${totalOrdersToday} ta\n` +
+            `💰 <b>Umumiy Balans:</b> ${new Intl.NumberFormat('uz-UZ').format(totalBalance)} UZS\n\n` +
             `⭐ <b>O'qilmagan Sharhlar:</b> ${unreadReviewsCount} ta\n` +
             `🏬 <b>Faol Do'konlar:</b> ${shopsCount} ta\n` +
             `🛍️ <b>Mahsulotlar Soni:</b> ${productsCount} ta\n\n` +
             `✅ <i>Barcha avtomatik sinxronlashlar muvaffaqiyatli bajarildi!</i>`;
     }
     async buildMonthlyReportMessage() {
+        const today = new Date();
+        const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
         const monthName = new Date().toLocaleDateString('uz-UZ', { month: 'long', year: 'numeric' });
-        const [shopsCount, totalOrders] = await Promise.all([
+        const [shopsCount, totalOrdersMonth] = await Promise.all([
             this.prisma.shop.count(),
-            this.prisma.order.count(),
+            this.prisma.order.count({ where: { orderedAt: { gte: startOfMonth, lte: endOfMonth } } }),
         ]);
         const revenueAggregate = await this.prisma.order.aggregate({
+            where: { orderedAt: { gte: startOfMonth, lte: endOfMonth } },
             _sum: { sellPrice: true },
         });
-        const revenue = revenueAggregate._sum?.sellPrice || 0;
+        const revenueMonth = revenueAggregate._sum?.sellPrice || 0;
+        const financeSummaries = await this.prisma.financeSummary.findMany();
+        let totalReturns = 0;
+        financeSummaries.forEach(f => totalReturns += f.returnsPerMonth);
         return `<b>🏆 OYLIK YAKUNIY HISOBOT (Uzum ERP)</b>\n` +
             `📅 <b>Davr:</b> ${monthName}\n\n` +
-            `💰 <b>Oylik Tushum:</b> ${new Intl.NumberFormat('uz-UZ').format(revenue)} UZS\n` +
-            `📦 <b>Oylik Buyurtmalar:</b> ${totalOrders} ta\n` +
+            `💰 <b>Oylik Savdo:</b> ${new Intl.NumberFormat('uz-UZ').format(revenueMonth)} UZS\n` +
+            `📉 <b>Oylik Qaytarishlar (Vozvrat):</b> ${new Intl.NumberFormat('uz-UZ').format(totalReturns)} UZS\n` +
+            `📦 <b>Oylik Buyurtmalar:</b> ${totalOrdersMonth} ta\n` +
             `🏬 <b>Ulangan Do'konlar:</b> ${shopsCount} ta\n\n` +
             `📈 <i>ERP Avtomatizatsiya tizimi barqaror ishlamoqda.</i>`;
     }

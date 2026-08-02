@@ -7,6 +7,9 @@ export declare class AnalyticsController {
             totalRevenue: number;
             revenueGrowth: number;
             totalOrders: number;
+            successfulOrders: number;
+            canceledOrders: number;
+            processingOrders: number;
             ordersGrowth: number;
             totalProducts: number;
             lowStockProducts: number;
