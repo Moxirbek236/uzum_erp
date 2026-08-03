@@ -278,7 +278,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const payloadObj = {
         invoiceIds: [Number(invoiceId || latestInvoice.invoiceId)],
         poolSource: poolSource || 'FULLFILMENT',
-        timeFrom: latestInvoice.timeSlotReservation?.timeFrom ? Number(latestInvoice.timeSlotReservation.timeFrom) : Date.now(),
+        timeFrom: Date.now(),
       };
 
       const slotRes = await fetch(
