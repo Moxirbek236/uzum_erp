@@ -58,15 +58,25 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
           try {
             const info = await this.findOpenSlotInfo(token, shop.uzumShopId, undefined, shop.name);
             if (info && info.hasSlot && info.message && info.timeFrom) {
-              const keyboard = {
-                inline_keyboard: [
-                  [{ text: '📥 Bron qilish', callback_data: `book_start:${shop.uzumShopId}:${info.timeFrom}` }],
-                ],
-              };
-              this.bot?.sendMessage(chatId, info.message, { parse_mode: 'HTML', reply_markup: keyboard });
+              await this.bot.sendMessage(chatId, info.message, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: "Avtomatik bron qilish",
+                        callback_data: `book_${shop.id}_${info.timeFrom}`,
+                      },
+                    ],
+                  ],
+                },
+              });
             } else {
-              const noSlotMsg = `🏬 <b>${shop.name || 'Ombor'}</b>\n\n❌ <i>Hozircha erkin slot topilmadi.</i>`;
-              this.bot?.sendMessage(chatId, noSlotMsg, { parse_mode: 'HTML' });
+              let noSlotMsg = `🏬 <b>${shop.name || 'Ombor'}</b>\n\n❌ <i>Hozircha erkin slot topilmadi.</i>`;
+              if (info?.debug) {
+                noSlotMsg += `\n\n🛠 <b>Debug:</b> <code>${info.debug}</code>`;
+              }
+              await this.bot.sendMessage(chatId, noSlotMsg, { parse_mode: 'HTML' });
             }
           } catch (err) {
             this.logger.error(`Error checking slots for shop ${shop.uzumShopId} in /slots command`, err);
@@ -231,7 +241,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     shopId: number,
     daysLimit?: number,
     shopName?: string,
-  ): Promise<{ hasSlot: boolean; message?: string; timeFrom?: number } | null> {
+  ): Promise<{ hasSlot: boolean; message?: string; timeFrom?: number; debug?: string } | null> {
     try {
       const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
       const headers = this.getAuthHeaders(token);
@@ -241,14 +251,23 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         `${baseUrl}/api/seller/shop/${shopId}/invoice?page=0&size=20`,
         { headers },
       );
-      if (!invoiceRes.ok) return null;
+      if (!invoiceRes.ok) return { hasSlot: false, debug: `Invoice API returned status: ${invoiceRes.status}` };
 
       const rawInvoices = await invoiceRes.json();
       const invoices = rawInvoices?.payload ? rawInvoices.payload : rawInvoices;
-      if (!Array.isArray(invoices) || invoices.length === 0) return null;
+      
+      if (!Array.isArray(invoices)) {
+        return { hasSlot: false, debug: `Invoices is not an array. Keys: ${Object.keys(invoices || {}).join(',')}` };
+      }
+      if (invoices.length === 0) {
+        return { hasSlot: false, debug: `Invoices array is empty` };
+      }
 
-      const latestInvoice = invoices.find(inv => inv.invoiceStatus?.value === 'CREATED');
-      if (!latestInvoice) return null;
+      const validStatuses = ['CREATED', 'READY_FOR_DELIVERY'];
+      let latestInvoice = invoices.find(inv => validStatuses.includes(inv.invoiceStatus?.value));
+      if (!latestInvoice) {
+        latestInvoice = invoices[0]; // fallback
+      }
 
       const invoiceId = latestInvoice.id;
       const stockTitle = latestInvoice.stock?.title || 'Ombor';
@@ -268,13 +287,18 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
           }),
         },
       );
-      if (!slotRes.ok) return null;
+      if (!slotRes.ok) {
+        const errText = await slotRes.text().catch(() => '');
+        return { hasSlot: false, debug: `Slot API error ${slotRes.status}: ${errText}` };
+      }
 
       const slotData = await slotRes.json();
       const timeSlots: { timeFrom: number; timeTo: number }[] =
         slotData?.payload?.timeSlots || [];
 
-      if (timeSlots.length === 0) return { hasSlot: false };
+      if (timeSlots.length === 0) {
+        return { hasSlot: false, debug: `Uzum API returned 0 timeSlots for invoice ${invoiceId}` };
+      }
 
       const reservedFrom = latestInvoice.timeSlotReservation?.timeFrom;
 
@@ -290,7 +314,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         )
         .sort((a, b) => a.timeFrom - b.timeFrom);
 
-      if (openSlots.length === 0) return { hasSlot: false };
+      if (openSlots.length === 0) {
+        return { hasSlot: false, debug: `Found ${timeSlots.length} slots, but all filtered out. First slot timeFrom: ${timeSlots[0]?.timeFrom}, Now: ${now}, DaysLimit: ${daysLimit}` };
+      }
 
       const firstSlot = openSlots[0];
       const fromDate = new Date(firstSlot.timeFrom);
