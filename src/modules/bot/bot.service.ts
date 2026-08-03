@@ -374,8 +374,8 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   private lastAlertedSlot: Record<number, number> = {};
 
   private async checkSlotsForShop(token: string, shopId: number, shopName: string) {
-    // Background cron job faqata 4 kun ichidagi slotlarni tekshiradi
-    const info = await this.findOpenSlotInfo(token, shopId, 4, shopName);
+    // Background cron job faqat 3 kun ichidagi slotlarni tekshiradi
+    const info = await this.findOpenSlotInfo(token, shopId, 3, shopName);
     if (!info || !info.hasSlot || !info.message || !info.timeFrom) return;
 
     // Deduplication check: if we already sent an alert for this exact slot, don't spam.
