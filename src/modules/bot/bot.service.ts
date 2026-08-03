@@ -243,8 +243,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       );
       if (!invoiceRes.ok) return null;
 
-      const invoices: any[] = await invoiceRes.json();
-      if (!invoices || invoices.length === 0) return null;
+      const rawInvoices = await invoiceRes.json();
+      const invoices = rawInvoices?.payload ? rawInvoices.payload : rawInvoices;
+      if (!Array.isArray(invoices) || invoices.length === 0) return null;
 
       const latestInvoice = invoices[0];
       const invoiceId = latestInvoice.id;
@@ -471,9 +472,10 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      const invoices: any[] = await res.json();
-      const bookable = (invoices || []).filter(
-        (inv) => inv.invoiceStatus?.value === 'CREATED',
+      const rawInvoices = await res.json();
+      const invoices = rawInvoices?.payload ? rawInvoices.payload : rawInvoices;
+      const bookable = (Array.isArray(invoices) ? invoices : []).filter(
+        (inv: any) => inv.invoiceStatus?.value === 'CREATED',
       );
 
       if (bookable.length === 0) {
@@ -666,15 +668,38 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
 
 
   private async buildStatsMessage(): Promise<string> {
-    const [shops, products, reviews] = await Promise.all([
+    const [shops, products, reviews, financeSummaries] = await Promise.all([
       this.prisma.shop.count(),
       this.prisma.product.count(),
       this.prisma.review.count(),
+      this.prisma.financeSummary.findMany(),
     ]);
 
-    return `<b>📈 UZUM ERP STATISTIKA</b>\n\n` +
+    let last1Day = 0;
+    let last7Days = 0;
+    let last14Days = 0;
+    let last30Days = 0;
+
+    financeSummaries.forEach(f => {
+      const salesData = Array.isArray(f.salesChartData) ? f.salesChartData as any[] : [];
+      if (salesData.length > 0) {
+        last1Day += Number(salesData[salesData.length - 1]?.sales || 0);
+        last7Days += salesData.slice(-7).reduce((acc, curr) => acc + Number(curr.sales || 0), 0);
+        last14Days += salesData.slice(-14).reduce((acc, curr) => acc + Number(curr.sales || 0), 0);
+        last30Days += salesData.reduce((acc, curr) => acc + Number(curr.sales || 0), 0);
+      }
+    });
+
+    const formatCurrency = (val: number) => new Intl.NumberFormat('uz-UZ').format(val);
+
+    return `<b>📈 UZUM ERP STATISTIKA VA MOLIYA</b>\n\n` +
       `🏬 <b>Do'konlar:</b> ${shops} ta\n` +
       `🛍️ <b>Mahsulotlar:</b> ${products} ta\n` +
-      `⭐ <b>Sharhlar:</b> ${reviews} ta\n`;
+      `⭐ <b>Sharhlar:</b> ${reviews} ta\n\n` +
+      `💸 <b>Sotuvlar (Barcha do'konlar):</b>\n` +
+      `▪️ <b>Oxirgi 1 kun:</b> ${formatCurrency(last1Day)} so'm\n` +
+      `▪️ <b>Oxirgi 7 kun:</b> ${formatCurrency(last7Days)} so'm\n` +
+      `▪️ <b>Oxirgi 14 kun:</b> ${formatCurrency(last14Days)} so'm\n` +
+      `▪️ <b>Oxirgi 1 oy:</b> ${formatCurrency(last30Days)} so'm\n`;
   }
 }

@@ -328,13 +328,18 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
           const productId = item.product?.productId || 0;
           const rating = item.rating || 5;
 
+          const isReplied = item.reply !== null && item.reply !== undefined;
+          const mappedReplyStatus = isReplied ? 'REPLIED' : 'NO_REPLY';
+          const existingReplyContent = isReplied ? item.reply.content : null;
+
           await this.prisma.review.upsert({
             where: { id: reviewId },
             update: {
               rating,
               content: item.content || null,
               isRead: item.read || false,
-              replyStatus:  item.replyStatus || null,
+              replyStatus: mappedReplyStatus,
+              ...(existingReplyContent && { aiReply: existingReplyContent }),
             },
             create: {
               id: reviewId,
@@ -350,7 +355,8 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
               createdAt: item.dateCreated ? new Date(item.dateCreated) : new Date(),
               isRead: item.read || false,
               isPinned: item.pinned || false,
-              replyStatus: item.replyStatus || null,
+              replyStatus: mappedReplyStatus,
+              aiReply: existingReplyContent,
             },
           });
         }
