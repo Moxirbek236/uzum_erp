@@ -236,9 +236,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
       const headers = this.getAuthHeaders(token);
 
-      // Step 1: Get latest invoice
+      // Step 1: Get latest CREATED invoice
       const invoiceRes = await fetch(
-        `${baseUrl}/api/seller/shop/${shopId}/invoice?page=0&size=1`,
+        `${baseUrl}/api/seller/shop/${shopId}/invoice?page=0&size=20`,
         { headers },
       );
       if (!invoiceRes.ok) return null;
@@ -247,7 +247,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const invoices = rawInvoices?.payload ? rawInvoices.payload : rawInvoices;
       if (!Array.isArray(invoices) || invoices.length === 0) return null;
 
-      const latestInvoice = invoices[0];
+      const latestInvoice = invoices.find(inv => inv.invoiceStatus?.value === 'CREATED');
+      if (!latestInvoice) return null;
+
       const invoiceId = latestInvoice.id;
       const stockTitle = latestInvoice.stock?.title || 'Ombor';
       const stockAddress = latestInvoice.stock?.address || '';
