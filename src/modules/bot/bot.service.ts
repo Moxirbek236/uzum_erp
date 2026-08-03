@@ -278,10 +278,11 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const poolSource = latestInvoice.stock?.poolSource || 'FULLFILMENT';
 
       // Step 2: Check available time slots
+      const tashkentOffsetMs = 5 * 60 * 60 * 1000;
       const payloadObj = {
         invoiceIds: [Number(invoiceId || latestInvoice.invoiceId)],
         poolSource: poolSource || 'FULLFILMENT',
-        timeFrom: Date.now(),
+        timeFrom: Date.now() + tashkentOffsetMs,
       };
 
       const slotRes = await fetch(
