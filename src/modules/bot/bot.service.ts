@@ -264,7 +264,10 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       }
 
       const validStatuses = ['CREATED', 'READY_FOR_DELIVERY'];
-      let latestInvoice = invoices.find(inv => validStatuses.includes(inv.invoiceStatus?.value));
+      let latestInvoice = invoices.find(inv => inv.invoiceStatus?.value === 'CREATED');
+      if (!latestInvoice) {
+        latestInvoice = invoices.find(inv => inv.invoiceStatus?.value === 'READY_FOR_DELIVERY');
+      }
       if (!latestInvoice) {
         latestInvoice = invoices[0]; // fallback
       }
@@ -324,28 +327,24 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const fromDate = new Date(firstSlot.timeFrom);
       const toDate = new Date(firstSlot.timeTo);
 
-      const dateStr = fromDate.toLocaleDateString('uz-UZ', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-      });
-      const fromTime = fromDate.toLocaleTimeString('uz-UZ', {
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-      const toTime = toDate.toLocaleTimeString('uz-UZ', {
-        hour: '2-digit',
-        minute: '2-digit',
-      });
+      const sDateStr = fromDate.toLocaleDateString('ru-RU', { timeZone: 'Asia/Tashkent' });
+      const sFromTime = fromDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent' });
+      const sToTime = toDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent' });
+
+      let msg = `🏬 <b>${shopName || 'Ombor'}</b>\n\n`;
+      msg += `📦 Nakladnoy: <b>${invoiceId}</b>\n`;
+      msg += `✅ <b>Erkin slotlar topildi!</b>\n\n`;
+      msg += `📌 Eng yaqin vaqt: <b>${sDateStr} ${sFromTime} - ${sToTime}</b>\n`;
 
       let slotsList = '';
       openSlots.slice(0, 3).forEach((s, i) => {
         const sFrom = new Date(s.timeFrom);
         const sTo = new Date(s.timeTo);
-        const sDateStr = sFrom.toLocaleDateString('uz-UZ', { day: '2-digit', month: '2-digit', year: 'numeric' });
-        const sFromTime = sFrom.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' });
-        const sToTime = sTo.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' });
-        const prefix = i === openSlots.slice(0, 3).length - 1 && openSlots.length <= 3 ? '  └' : '  ├';
+        const sDateStr = sFrom.toLocaleDateString('ru-RU', { timeZone: 'Asia/Tashkent' });
+        const sFromTime = sFrom.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent' });
+        const sToTime = sTo.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent' });
+
+        const prefix = i === 0 ? '🕒' : '🗓';
         slotsList += `${prefix} ✅ ${sDateStr} ${sFromTime} - ${sToTime}\n`;
       });
       if (openSlots.length > 3) {
@@ -357,7 +356,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         `🏪 <b>Do'kon:</b> ${shopName || 'Noma\'lum'}\n` +
         `🏬 <b>Ombor:</b> ${stockTitle}\n` +
         `📍 <b>Manzil:</b> ${stockAddress}\n` +
-        `📅 <b>Eng yaqin:</b> ${dateStr} ${fromTime} - ${toTime}\n` +
+        `📅 <b>Eng yaqin:</b> ${sDateStr} ${sFromTime} - ${sToTime}\n` +
         `📦 <b>Nakladnoy ID:</b> #${invoiceId}\n` +
         `🔢 <b>Mavjud slot:</b> ${openSlots.length} ta\n` +
         `${slotsList}\n` +
