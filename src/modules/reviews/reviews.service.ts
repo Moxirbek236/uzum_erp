@@ -123,12 +123,30 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
   }
 
   async replyToReview(reviewId: string, replyText: string) {
-    const firstUser = await this.prisma.user.findFirst({
-      where: { uzumToken: { not: null } },
+    const review = await this.prisma.review.findUnique({
+      where: { id: reviewId },
     });
 
-    if (firstUser && firstUser.uzumToken) {
-      await this.sendReplyToUzum(firstUser.uzumToken, reviewId, replyText);
+    let tokenToUse: string | null = null;
+    if (review && review.shopId) {
+      const shopPermission = await this.prisma.shopPermission.findFirst({
+        where: { shopId: review.shopId },
+        include: { user: true },
+      });
+      if (shopPermission?.user?.uzumToken) {
+        tokenToUse = shopPermission.user.uzumToken;
+      }
+    }
+
+    if (!tokenToUse) {
+      const firstUser = await this.prisma.user.findFirst({
+        where: { uzumToken: { not: null } },
+      });
+      tokenToUse = firstUser?.uzumToken || null;
+    }
+
+    if (tokenToUse) {
+      await this.sendReplyToUzum(tokenToUse, reviewId, replyText);
     }
 
     return this.prisma.review.update({
@@ -240,12 +258,26 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
       return;
     }
 
-    const firstUser = await this.prisma.user.findFirst({
-      where: { uzumToken: { not: null } },
-    });
+    let tokenToUse: string | null = null;
+    if (unrepliedReview.shopId) {
+      const shopPermission = await this.prisma.shopPermission.findFirst({
+        where: { shopId: unrepliedReview.shopId },
+        include: { user: true },
+      });
+      if (shopPermission?.user?.uzumToken) {
+        tokenToUse = shopPermission.user.uzumToken;
+      }
+    }
 
-    if (!firstUser || !firstUser.uzumToken) {
-      this.logger.warn('AUTO_REPLY skipped: No active Uzum token found.');
+    if (!tokenToUse) {
+      const firstUser = await this.prisma.user.findFirst({
+        where: { uzumToken: { not: null } },
+      });
+      tokenToUse = firstUser?.uzumToken || null;
+    }
+
+    if (!tokenToUse) {
+      this.logger.warn(`AUTO_REPLY skipped: No active Uzum token found for shop ${unrepliedReview.shopId}.`);
       return;
     }
 
@@ -253,7 +285,7 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
     const { aiReply } = await this.generateAiReply(unrepliedReview.id);
 
     // Send real reply to Uzum API
-    const isSuccess = await this.sendReplyToUzum(firstUser.uzumToken, unrepliedReview.id, aiReply);
+    const isSuccess = await this.sendReplyToUzum(tokenToUse, unrepliedReview.id, aiReply);
 
     if (isSuccess) {
       // Update local DB status only if successful
