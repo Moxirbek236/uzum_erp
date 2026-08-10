@@ -181,7 +181,6 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
   /**
    * Sends a real review reply payload to Uzum API
    * Endpoint: POST https://api-seller.uzum.uz/api/seller/product-reviews/reply/create
-   * Payload: [{ reviewId, content }]
    */
   async sendReplyToUzum(token: string, reviewIdStr: string, content: string) {
     try {
@@ -191,6 +190,9 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Origin': 'https://seller.uzum.uz',
+        'Referer': 'https://seller.uzum.uz/',
       };
 
       if (token.includes('=')) {
@@ -200,34 +202,71 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
       }
 
       const parsedId = parseInt(reviewIdStr, 10);
-      const payload = [
+      const isNum = !isNaN(parsedId);
+
+      // Strategy to overcome undocumented API changes or WAF issues:
+      // Try multiple known working formats until one succeeds.
+      const payloadsToTry = [
+        // Format 1: Standard from documentation (Array of objects)
+        [
+          {
+            reviewId: isNum ? parsedId : reviewIdStr,
+            content: content,
+          },
+        ],
+        // Format 2: Object directly instead of array
         {
-          reviewId: isNaN(parsedId) ? reviewIdStr : parsedId,
+          reviewId: isNum ? parsedId : reviewIdStr,
           content: content,
         },
+        // Format 3: Array of objects with both 'id' and 'text' as fallback
+        [
+          {
+            reviewId: isNum ? parsedId : reviewIdStr,
+            id: isNum ? parsedId : reviewIdStr,
+            content: content,
+            text: content,
+          },
+        ],
+        // Format 4: Same as Format 1 but with string ID
+        [
+          {
+            reviewId: reviewIdStr,
+            content: content,
+          },
+        ]
       ];
 
-      const res = await fetch(`${baseUrl}/api/seller/product-reviews/reply/create`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const errorText = await res.text();
-        this.logger.warn(`Uzum review reply create returned status ${res.status}. Body: ${errorText}`);
+      for (let i = 0; i < payloadsToTry.length; i++) {
+        const payload = payloadsToTry[i];
         
-        // Agar allaqachon javob berilgan bo'lsa (Uzum kabinetidan yozilgan bo'lsa), DB da ham REPLIED qilib belgilash uchun true qaytaramiz
+        const res = await fetch(`${baseUrl}/api/seller/product-reviews/reply/create`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload),
+        });
+
+        if (res.ok) {
+          this.logger.log(`Uzum review reply create successful for #${reviewIdStr} using format ${i + 1}`);
+          return true;
+        }
+
+        const errorText = await res.text();
+        this.logger.warn(`Uzum review reply format ${i + 1} failed. Status: ${res.status}. Body: ${errorText}`);
+        
+        // Agar allaqachon javob berilgan bo'lsa
         if (errorText.includes('has reply') || errorText.includes('feedback-001')) {
           this.logger.log(`Review #${reviewIdStr} is already replied on Uzum. Treating as success to update local DB.`);
           return true;
         }
-
-        return false;
+        
+        // If it's a 4xx error (e.g. 401 Unauthorized, 403 Forbidden), don't retry with other formats
+        if (res.status >= 400 && res.status < 500) {
+          return false;
+        }
       }
 
-      this.logger.log(`Uzum review reply create successful for #${reviewIdStr}`);
-      return true;
+      return false;
     } catch (err) {
       this.logger.error(`Failed to send reply to Uzum for review #${reviewIdStr}`, err);
       return false;
@@ -249,7 +288,7 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
 
     const unrepliedReview = await this.prisma.review.findFirst({
       where: {
-        OR: [{ replyStatus: null }, { replyStatus: { not: 'REPLIED' } }],
+        OR: [{ replyStatus: null }, { replyStatus: 'NO_REPLY' }],
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -300,7 +339,14 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
 
       this.logger.log(`AUTO_REPLY successfully sent AI reply for review #${unrepliedReview.id}`);
     } else {
-      this.logger.warn(`AUTO_REPLY failed to send AI reply for review #${unrepliedReview.id}`);
+      // Mark as FAILED so it doesn't block the queue forever
+      await this.prisma.review.update({
+        where: { id: unrepliedReview.id },
+        data: {
+          replyStatus: 'FAILED',
+        },
+      });
+      this.logger.warn(`AUTO_REPLY failed to send AI reply for review #${unrepliedReview.id}. Marked as FAILED to prevent blocking queue.`);
     }
   }
 
