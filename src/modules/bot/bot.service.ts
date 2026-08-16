@@ -124,7 +124,16 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   async getGroupMentions(): Promise<string> {
     try {
       const chatId = this.getTargetChatId();
-      const userMap = new Map<number, string>();
+      const userMap = new Map<number | string, string>();
+
+      // 0. From ENV TELEGRAM_TAG_USERS if specified
+      if (process.env.TELEGRAM_TAG_USERS) {
+        const envUsers = process.env.TELEGRAM_TAG_USERS.split(/[,\s]+/).filter(Boolean);
+        for (const u of envUsers) {
+          const cleanTag = u.startsWith('@') ? u : `@${u}`;
+          userMap.set(cleanTag, cleanTag);
+        }
+      }
 
       // 1. Fetch group administrators
       const admins = await this.bot?.getChatAdministrators(chatId).catch(() => []);
