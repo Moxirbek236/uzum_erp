@@ -107,18 +107,65 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   }
 
   async editGroupMessage(messageId: number, text: string, options?: any): Promise<any> {
-    const chatId = this.getTargetChatId();
-    return await this.bot.editMessageText(text, {
-      chat_id: chatId,
-      message_id: messageId,
-      parse_mode: 'HTML',
-      ...options,
-    });
+    const primaryId = this.getTargetChatId();
+    const raw = (this.groupChatId || '5157263324').trim();
+    const candidateIds = Array.from(new Set([
+      primaryId,
+      raw.startsWith('-') ? raw : `-100${raw}`,
+      raw.startsWith('-') ? raw : `-${raw}`,
+      raw,
+    ]));
+
+    let lastError: any = null;
+    for (const chatId of candidateIds) {
+      try {
+        const res = await this.bot.editMessageText(text, {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: 'HTML',
+          ...options,
+        });
+        if (res) {
+          this.botState.resolvedGroupChatId = chatId;
+          this.saveState();
+          return res;
+        }
+      } catch (err: any) {
+        lastError = err;
+        const desc = err.response?.body?.description || err.message || '';
+        if (desc.includes('message is not modified')) {
+          return true;
+        }
+        if (desc.includes('chat not found') || desc.includes('message to edit not found')) {
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastError || new Error(`Could not edit message ${messageId}`);
   }
 
   async deleteGroupMessage(messageId: number): Promise<void> {
-    const chatId = this.getTargetChatId();
-    await this.bot.deleteMessage(chatId, messageId).catch(() => {});
+    const primaryId = this.getTargetChatId();
+    const raw = (this.groupChatId || '5157263324').trim();
+    const candidateIds = Array.from(new Set([
+      primaryId,
+      raw.startsWith('-') ? raw : `-100${raw}`,
+      raw.startsWith('-') ? raw : `-${raw}`,
+      raw,
+    ]));
+
+    for (const chatId of candidateIds) {
+      try {
+        await this.bot.deleteMessage(chatId, messageId);
+        return;
+      } catch (e: any) {
+        const desc = e.response?.body?.description || e.message || '';
+        if (desc.includes('chat not found') || desc.includes('message to delete not found')) {
+          continue;
+        }
+      }
+    }
   }
 
   async getGroupMentions(): Promise<string> {
@@ -551,6 +598,10 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   private async checkSlotsForShop(token: string, shopId: number, shopName: string) {
     // Background cron job faqat 3 kun ichidagi slotlarni tekshiradi
     const info = await this.findOpenSlotInfo(token, shopId, 3, shopName);
+    if (!info) {
+      // Uzum API vaqtincha xatolik bersa holatni o'zgartirmay turamiz
+      return;
+    }
     
     if (!this.botState.shopAlerts) this.botState.shopAlerts = {};
     const state = this.botState.shopAlerts[shopId] || { hasSlot: false, isInteracting: false };
