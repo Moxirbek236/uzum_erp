@@ -19,6 +19,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   private botState: { 
     reportMessageId?: number, 
     slotsMessageId?: number,
+    resolvedGroupChatId?: string,
     shopAlerts?: Record<number, { messageId?: number; hasSlot: boolean; isInteracting: boolean; interactionUntil?: number }>
   } = {};
 
@@ -52,6 +53,69 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  getTargetChatId(): string {
+    if (this.botState.resolvedGroupChatId) {
+      return this.botState.resolvedGroupChatId;
+    }
+    const raw = (this.groupChatId || '5157263324').trim();
+    if (raw.startsWith('-')) {
+      return raw;
+    }
+    if (raw.length >= 9) {
+      return `-100${raw}`;
+    }
+    return `-${raw}`;
+  }
+
+  async sendToGroup(text: string, options?: any): Promise<any> {
+    const primaryId = this.getTargetChatId();
+    const raw = (this.groupChatId || '5157263324').trim();
+    const candidateIds = Array.from(new Set([
+      primaryId,
+      raw.startsWith('-') ? raw : `-100${raw}`,
+      raw.startsWith('-') ? raw : `-${raw}`,
+      raw,
+    ]));
+
+    let lastError: any = null;
+    for (const chatId of candidateIds) {
+      try {
+        const res = await this.bot.sendMessage(chatId, text, {
+          parse_mode: 'HTML',
+          ...options,
+        });
+        if (res && res.message_id) {
+          this.botState.resolvedGroupChatId = chatId;
+          this.saveState();
+          return res;
+        }
+      } catch (err: any) {
+        lastError = err;
+        const desc = err.response?.body?.description || err.message || '';
+        if (desc.includes('chat not found') || desc.includes('chat_id is empty')) {
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastError || new Error(`Could not send message to any target chat ID: ${candidateIds.join(', ')}`);
+  }
+
+  async editGroupMessage(messageId: number, text: string, options?: any): Promise<any> {
+    const chatId = this.getTargetChatId();
+    return await this.bot.editMessageText(text, {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'HTML',
+      ...options,
+    });
+  }
+
+  async deleteGroupMessage(messageId: number): Promise<void> {
+    const chatId = this.getTargetChatId();
+    await this.bot.deleteMessage(chatId, messageId).catch(() => {});
+  }
+
   onModuleDestroy() {
     if (this.bot) {
       this.logger.log('Stopping Telegram Bot polling...');
@@ -70,12 +134,23 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const BotConstructor = TelegramBot.default || TelegramBot;
       this.bot = new BotConstructor(this.botToken, { polling: true });
 
-      // Handle Telegram Bot Commands & Clean group messages
+      // Handle Telegram Bot Messages: auto-detect group chat id & clean user messages
       this.bot.on('message', async (msg: any) => {
-        if (msg.chat && (msg.chat.id.toString() === this.groupChatId || msg.chat.id.toString() === `-${this.groupChatId}`)) {
+        if (msg.chat) {
+          if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
+            if (this.botState.resolvedGroupChatId !== msg.chat.id.toString()) {
+              this.botState.resolvedGroupChatId = msg.chat.id.toString();
+              this.saveState();
+              this.logger.log(`Auto-detected Telegram groupChatId: ${this.botState.resolvedGroupChatId}`);
+            }
+          }
+
+          const targetId = this.getTargetChatId();
+          if (msg.chat.id.toString() === targetId || msg.chat.id.toString() === this.groupChatId || msg.chat.id.toString() === `-${this.groupChatId}`) {
             try {
-                await this.bot.deleteMessage(msg.chat.id, msg.message_id).catch(()=>null);
-            } catch(e) {}
+              await this.bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => null);
+            } catch (e) {}
+          }
         }
       });
       
@@ -98,7 +173,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         );
       });
 
-      this.logger.log(`Telegram Bot initialized successfully. Target Group ID: ${this.groupChatId}`);
+      this.logger.log(`Telegram Bot initialized successfully. Target Group ID: ${this.getTargetChatId()}`);
     } catch (err) {
       this.logger.error('Failed to initialize Telegram Bot polling', err);
     }
@@ -113,41 +188,15 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     targetChatId?: string,
     replyMarkup?: any,
   ): Promise<boolean> {
-    const chatId = targetChatId || this.groupChatId;
-    if (!chatId) {
-      this.logger.warn('No Telegram Group ID configured.');
-      return false;
-    }
-
-    // Direct Telegram API fetch for maximum reliability
     try {
-      const url = `https://api.telegram.org/bot${this.botToken}/sendMessage`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId.startsWith('-') || chatId.length > 10 ? chatId : `-${chatId}`,
-          text: text,
+      if (targetChatId) {
+        await this.bot.sendMessage(targetChatId, text, {
           parse_mode: 'HTML',
           ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-        }),
-      });
-
-      if (!res.ok) {
-        // Fallback without minus prefix if custom ID passed
-        const fallbackRes = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: text,
-            parse_mode: 'HTML',
-            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-          }),
         });
-        return fallbackRes.ok;
+        return true;
       }
-
+      await this.sendToGroup(text, replyMarkup ? { reply_markup: replyMarkup } : {});
       return true;
     } catch (err) {
       this.logger.error('Failed sending Telegram group message', err);
@@ -164,14 +213,10 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         const reportText = await this.buildMainDashboardMessage();
         if (this.botState.reportMessageId) {
             try {
-                await this.bot.editMessageText(reportText, {
-                    chat_id: this.groupChatId,
-                    message_id: this.botState.reportMessageId,
-                    parse_mode: 'HTML'
-                });
+                await this.editGroupMessage(this.botState.reportMessageId, reportText);
             } catch (err: any) {
                 if (err.response?.body?.description?.includes('message to edit not found')) {
-                    const res = await this.bot.sendMessage(this.groupChatId, reportText, { parse_mode: 'HTML' });
+                    const res = await this.sendToGroup(reportText);
                     this.botState.reportMessageId = res.message_id;
                     this.saveState();
                 } else if (!err.response?.body?.description?.includes('message is not modified')) {
@@ -179,7 +224,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
                 }
             }
         } else {
-            const res = await this.bot.sendMessage(this.groupChatId, reportText, { parse_mode: 'HTML' });
+            const res = await this.sendToGroup(reportText);
             this.botState.reportMessageId = res.message_id;
             this.saveState();
         }
@@ -192,14 +237,10 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         const slotsText = await this.buildOpenSlotsMessage();
         if (this.botState.slotsMessageId) {
             try {
-                await this.bot.editMessageText(slotsText, {
-                    chat_id: this.groupChatId,
-                    message_id: this.botState.slotsMessageId,
-                    parse_mode: 'HTML'
-                });
+                await this.editGroupMessage(this.botState.slotsMessageId, slotsText);
             } catch (err: any) {
                 if (err.response?.body?.description?.includes('message to edit not found')) {
-                    const res = await this.bot.sendMessage(this.groupChatId, slotsText, { parse_mode: 'HTML' });
+                    const res = await this.sendToGroup(slotsText);
                     this.botState.slotsMessageId = res.message_id;
                     this.saveState();
                 } else if (!err.response?.body?.description?.includes('message is not modified')) {
@@ -207,7 +248,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
                 }
             }
         } else {
-            const res = await this.bot.sendMessage(this.groupChatId, slotsText, { parse_mode: 'HTML' });
+            const res = await this.sendToGroup(slotsText);
             this.botState.slotsMessageId = res.message_id;
             this.saveState();
         }
@@ -480,14 +521,11 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     if (shouldDeleteAndCreate || !state.messageId) {
         // Delete old
         if (state.messageId) {
-            await this.bot.deleteMessage(this.groupChatId, state.messageId).catch(() => {});
+            await this.deleteGroupMessage(state.messageId);
         }
         // Create new
         try {
-            const res = await this.bot.sendMessage(this.groupChatId, textToSend, {
-                parse_mode: 'HTML',
-                ...(keyboard ? { reply_markup: keyboard } : {})
-            });
+            const res = await this.sendToGroup(textToSend, keyboard ? { reply_markup: keyboard } : {});
             state.messageId = res.message_id;
         } catch (e) {
             this.logger.error(`Error sending alert for shop ${shopId}`, e);
@@ -496,18 +534,10 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         // Same state, just edit
         if (state.messageId) {
             try {
-                await this.bot.editMessageText(textToSend, {
-                    chat_id: this.groupChatId,
-                    message_id: state.messageId,
-                    parse_mode: 'HTML',
-                    ...(keyboard ? { reply_markup: keyboard } : {})
-                });
+                await this.editGroupMessage(state.messageId, textToSend, keyboard ? { reply_markup: keyboard } : {});
             } catch (err: any) {
                 if (err.response?.body?.description?.includes('message to edit not found')) {
-                    const res = await this.bot.sendMessage(this.groupChatId, textToSend, {
-                        parse_mode: 'HTML',
-                        ...(keyboard ? { reply_markup: keyboard } : {})
-                    });
+                    const res = await this.sendToGroup(textToSend, keyboard ? { reply_markup: keyboard } : {});
                     state.messageId = res.message_id;
                 }
             }
