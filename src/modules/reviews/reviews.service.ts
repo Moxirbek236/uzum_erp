@@ -290,7 +290,7 @@ Javobingiz tabiiy inson yozganidek eshitilsin, robotik so'zlardan qoching. Faqat
       where: {
         OR: [{ replyStatus: null }, { replyStatus: 'NO_REPLY' }],
       },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
     });
 
     if (!unrepliedReview) {

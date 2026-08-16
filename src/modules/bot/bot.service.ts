@@ -1,6 +1,8 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const TelegramBot = require('node-telegram-bot-api');
@@ -11,8 +13,32 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   private bot: any = null;
   private readonly botToken = process.env.TELEGRAM_BOT_TOKEN;
   private readonly groupChatId = process.env.TELEGRAM_GROUP_ID || '5157263324';
+  private readonly stateFilePath = path.join(process.cwd(), 'bot-state.json');
+  private botState: { reportMessageId?: number, slotsMessageId?: number } = {};
+  private lastAlertMessageIds: Record<number, number> = {};
 
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService) { 
+    this.loadState();
+  }
+
+  private loadState() {
+    try {
+      if (fs.existsSync(this.stateFilePath)) {
+        const data = fs.readFileSync(this.stateFilePath, 'utf8');
+        this.botState = JSON.parse(data);
+      }
+    } catch (err) {
+      this.logger.error('Failed to load bot state', err);
+    }
+  }
+
+  private saveState() {
+    try {
+      fs.writeFileSync(this.stateFilePath, JSON.stringify(this.botState, null, 2), 'utf8');
+    } catch (err) {
+      this.logger.error('Failed to save bot state', err);
+    }
+  }
 
   onModuleDestroy() {
     if (this.bot) {
@@ -34,8 +60,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
 
       // Handle Telegram Bot Commands
       this.bot.onText(/\/report/, async (msg: any) => {
-        const reportMsg = await this.buildDailyReportMessage();
-        this.bot?.sendMessage(msg.chat.id, reportMsg, { parse_mode: 'HTML' });
+        await this.updateDashboardMessages();
       });
 
       this.bot.onText(/\/slots/, async (msg: any) => {
@@ -86,8 +111,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       });
 
       this.bot.onText(/\/stats/, async (msg: any) => {
-        const statsMsg = await this.buildStatsMessage();
-        this.bot?.sendMessage(msg.chat.id, statsMsg, { parse_mode: 'HTML' });
+        await this.updateDashboardMessages();
       });
 
       // Handle inline keyboard button presses (bron qilish flow)
@@ -154,24 +178,65 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /**
-   * Daily Report Cron Job: Runs every day at 23:00
-   */
-  @Cron('0 23 * * *')
-  async handleDailyReportCron() {
-    this.logger.log('Running Daily Report Cron Job for Telegram...');
-    const message = await this.buildDailyReportMessage();
-    await this.sendGroupNotification(message);
-  }
+  @Cron(CronExpression.EVERY_MINUTE)
+  async updateDashboardMessages() {
+    this.logger.log('Updating dashboard and slots messages...');
+    
+    // Update Dashboard Report
+    try {
+        const reportText = await this.buildMainDashboardMessage();
+        if (this.botState.reportMessageId) {
+            try {
+                await this.bot.editMessageText(reportText, {
+                    chat_id: this.groupChatId,
+                    message_id: this.botState.reportMessageId,
+                    parse_mode: 'HTML'
+                });
+            } catch (err: any) {
+                if (err.response?.body?.description?.includes('message to edit not found')) {
+                    const res = await this.bot.sendMessage(this.groupChatId, reportText, { parse_mode: 'HTML' });
+                    this.botState.reportMessageId = res.message_id;
+                    this.saveState();
+                } else if (!err.response?.body?.description?.includes('message is not modified')) {
+                    this.logger.error('Failed to edit report message', err);
+                }
+            }
+        } else {
+            const res = await this.bot.sendMessage(this.groupChatId, reportText, { parse_mode: 'HTML' });
+            this.botState.reportMessageId = res.message_id;
+            this.saveState();
+        }
+    } catch(err) {
+        this.logger.error('Error in updateDashboardMessages (report)', err);
+    }
 
-  /**
-   * Monthly Report Cron Job: Runs on 1st day of every month at 00:00
-   */
-  @Cron('0 0 1 * *')
-  async handleMonthlyReportCron() {
-    this.logger.log('Running Monthly Report Cron Job for Telegram...');
-    const message = await this.buildMonthlyReportMessage();
-    await this.sendGroupNotification(message);
+    // Update Open Slots
+    try {
+        const slotsText = await this.buildOpenSlotsMessage();
+        if (this.botState.slotsMessageId) {
+            try {
+                await this.bot.editMessageText(slotsText, {
+                    chat_id: this.groupChatId,
+                    message_id: this.botState.slotsMessageId,
+                    parse_mode: 'HTML'
+                });
+            } catch (err: any) {
+                if (err.response?.body?.description?.includes('message to edit not found')) {
+                    const res = await this.bot.sendMessage(this.groupChatId, slotsText, { parse_mode: 'HTML' });
+                    this.botState.slotsMessageId = res.message_id;
+                    this.saveState();
+                } else if (!err.response?.body?.description?.includes('message is not modified')) {
+                    this.logger.error('Failed to edit slots message', err);
+                }
+            }
+        } else {
+            const res = await this.bot.sendMessage(this.groupChatId, slotsText, { parse_mode: 'HTML' });
+            this.botState.slotsMessageId = res.message_id;
+            this.saveState();
+        }
+    } catch(err) {
+         this.logger.error('Error in updateDashboardMessages (slots)', err);
+    }
   }
 
   /**
@@ -241,7 +306,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     shopId: number,
     daysLimit?: number,
     shopName?: string,
-  ): Promise<{ hasSlot: boolean; message?: string; timeFrom?: number; debug?: string } | null> {
+  ): Promise<{ hasSlot: boolean; message?: string; timeFrom?: number; debug?: string; openSlots?: any[] } | null> {
     try {
       const baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
       const headers = this.getAuthHeaders(token);
@@ -321,7 +386,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         .sort((a, b) => a.timeFrom - b.timeFrom);
 
       if (openSlots.length === 0) {
-        return { hasSlot: false, debug: `Found ${timeSlots.length} slots, but all filtered out. First slot timeFrom: ${timeSlots[0]?.timeFrom}, Now: ${now}, DaysLimit: ${daysLimit}` };
+        return { hasSlot: false, debug: `Found ${timeSlots.length} slots, but all filtered out. First slot timeFrom: ${timeSlots[0]?.timeFrom}, Now: ${now}, DaysLimit: ${daysLimit}`, openSlots: [] };
       }
 
       const firstSlot = openSlots[0];
@@ -363,7 +428,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         `${slotsList}\n` +
         `⚡ <i>Bron qilish uchun quyidagi tugmani bosing!</i>`;
 
-      return { hasSlot: true, message, timeFrom: firstSlot.timeFrom };
+      return { hasSlot: true, message, timeFrom: firstSlot.timeFrom, openSlots };
     } catch (err) {
       this.logger.error(`findOpenSlotInfo error for shopId ${shopId}`, err);
       return null;
@@ -400,7 +465,23 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         [{ text: '📥 Bron qilish', callback_data: `book_start:${shopId}:${timeFrom}` }],
       ],
     };
-    await this.sendGroupNotification(message, undefined, keyboard);
+    
+    // Delete old alert if exists for this shop
+    if (this.lastAlertMessageIds[shopId]) {
+      try {
+        await this.bot.deleteMessage(this.groupChatId, this.lastAlertMessageIds[shopId]).catch(() => {});
+      } catch (e) {}
+    }
+
+    try {
+        const res = await this.bot.sendMessage(this.groupChatId, message, {
+            parse_mode: 'HTML',
+            reply_markup: keyboard
+        });
+        this.lastAlertMessageIds[shopId] = res.message_id;
+    } catch(err) {
+        this.logger.error(`Failed to send alert for shop ${shopId}`, err);
+    }
   }
 
   /**
@@ -629,107 +710,109 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async buildDailyReportMessage(): Promise<string> {
+  private async buildMainDashboardMessage(): Promise<string> {
     const today = new Date();
     const startOfDay = new Date(today.setHours(0, 0, 0, 0));
     const endOfDay = new Date(today.setHours(23, 59, 59, 999));
     
-    const todayStr = new Date().toLocaleDateString('uz-UZ');
+    const todayYear = new Date();
+    const startOfYear = new Date(todayYear.getFullYear(), 0, 1);
+    const endOfYear = new Date(todayYear.getFullYear(), 11, 31, 23, 59, 59, 999);
 
-    const [shopsCount, productsCount, unreadReviewsCount, totalOrdersToday] = await Promise.all([
-      this.prisma.shop.count(),
-      this.prisma.product.count(),
-      this.prisma.review.count({ where: { isRead: false } }),
-      this.prisma.order.count({ where: { orderedAt: { gte: startOfDay, lte: endOfDay } } }),
-    ]);
+    const nowStr = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent' }).replace(',', '');
 
-    const revenueAggregate = await this.prisma.order.aggregate({
-      where: { orderedAt: { gte: startOfDay, lte: endOfDay } },
-      _sum: { sellPrice: true },
-    });
-    const revenueToday = revenueAggregate._sum?.sellPrice || 0;
+    const shops = await this.prisma.shop.findMany();
+    
+    let message = `<b>📊 🌟 UZUM ERP DASHBOARD 🌟</b>\n`;
+    message += `@all <i>Hisobotlar yangilandi!</i>\n\n`;
 
-    const financeSummaries = await this.prisma.financeSummary.findMany();
-    let totalBalance = 0;
-    financeSummaries.forEach(f => totalBalance += f.commonBalance);
+    let totalDailyRevenue = 0;
+    let totalDailyOrders = 0;
+    let totalYearlyRevenue = 0;
+    let totalYearlyOrders = 0;
 
-    return `<b>📊 KUNLIK YAKUNIY HISOBOT (Uzum ERP)</b>\n` +
-      `📅 <b>Sana:</b> ${todayStr}\n\n` +
-      `📈 <b>Bugungi Savdo:</b> ${new Intl.NumberFormat('uz-UZ').format(revenueToday)} UZS\n` +
-      `📦 <b>Bugungi Buyurtmalar:</b> ${totalOrdersToday} ta\n` +
-      `💰 <b>Umumiy Balans:</b> ${new Intl.NumberFormat('uz-UZ').format(totalBalance)} UZS\n\n` +
-      `⭐ <b>O'qilmagan Sharhlar:</b> ${unreadReviewsCount} ta\n` +
-      `🏬 <b>Faol Do'konlar:</b> ${shopsCount} ta\n` +
-      `🛍️ <b>Mahsulotlar Soni:</b> ${productsCount} ta\n\n` +
-      `✅ <i>Barcha avtomatik sinxronlashlar muvaffaqiyatli bajarildi!</i>`;
+    for (const shop of shops) {
+      // Daily
+      const dailyOrders = await this.prisma.order.count({
+        where: { shopId: shop.uzumShopId, orderedAt: { gte: startOfDay, lte: endOfDay } }
+      });
+      const dailyRevAgg = await this.prisma.order.aggregate({
+        where: { shopId: shop.uzumShopId, orderedAt: { gte: startOfDay, lte: endOfDay } },
+        _sum: { sellPrice: true }
+      });
+      const dailyRev = dailyRevAgg._sum?.sellPrice || 0;
+
+      // Yearly
+      const yearlyOrders = await this.prisma.order.count({
+        where: { shopId: shop.uzumShopId, orderedAt: { gte: startOfYear, lte: endOfYear } }
+      });
+      const yearlyRevAgg = await this.prisma.order.aggregate({
+        where: { shopId: shop.uzumShopId, orderedAt: { gte: startOfYear, lte: endOfYear } },
+        _sum: { sellPrice: true }
+      });
+      const yearlyRev = yearlyRevAgg._sum?.sellPrice || 0;
+
+      totalDailyRevenue += dailyRev;
+      totalDailyOrders += dailyOrders;
+      totalYearlyRevenue += yearlyRev;
+      totalYearlyOrders += yearlyOrders;
+
+      message += `🏬 <b>${shop.name}</b>\n`;
+      message += ` ├ 🌞 <b>Kunlik:</b> ${new Intl.NumberFormat('uz-UZ').format(dailyRev)} so'm 📦(${dailyOrders} ta)\n`;
+      message += ` └ 🗓 <b>Yillik:</b> ${new Intl.NumberFormat('uz-UZ').format(yearlyRev)} so'm 📦(${yearlyOrders} ta)\n\n`;
+    }
+
+    message += `🌍 <b>🏆 UMUMIY NATIJALAR 🏆</b>\n`;
+    message += ` ├ 💰 <b>Jami Kunlik:</b> ${new Intl.NumberFormat('uz-UZ').format(totalDailyRevenue)} so'm 📦(${totalDailyOrders} ta)\n`;
+    message += ` └ 💎 <b>Jami Yillik:</b> ${new Intl.NumberFormat('uz-UZ').format(totalYearlyRevenue)} so'm 📦(${totalYearlyOrders} ta)\n\n`;
+    
+    const unreadReviewsCount = await this.prisma.review.count({ where: { isRead: false } });
+    if (unreadReviewsCount > 0) {
+        message += `⚠️ <b>Diqqat!</b> ${unreadReviewsCount} ta o'qilmagan sharh bor!\n\n`;
+    }
+
+    message += `🔄 <i>Tekshirilgan vaqt: ${nowStr}</i>`;
+
+    return message;
   }
 
-  private async buildMonthlyReportMessage(): Promise<string> {
-    const today = new Date();
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
+  private async buildOpenSlotsMessage(): Promise<string> {
+    const token = await this.getUzumToken();
+    if (!token) {
+      return `<b>🕒 TIME-SLOT MONITORING</b>\n\n❌ <i>Uzum token topilmadi. Avval login qiling.</i>`;
+    }
+
+    const shops = await this.prisma.shop.findMany({ take: 5 });
+    if (!shops.length) {
+      return `<b>🕒 TIME-SLOT MONITORING</b>\n\n❌ <i>Do'konlar topilmadi.</i>`;
+    }
+
+    let message = `<b>🎯 BARCHA OCHIQ TIME-SLOTLAR (TOP 3)</b>\n\n`;
+    const nowStr = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent' }).replace(',', '');
     
-    const monthName = new Date().toLocaleDateString('uz-UZ', { month: 'long', year: 'numeric' });
-    
-    const [shopsCount, totalOrdersMonth] = await Promise.all([
-      this.prisma.shop.count(),
-      this.prisma.order.count({ where: { orderedAt: { gte: startOfMonth, lte: endOfMonth } } }),
-    ]);
-
-    const revenueAggregate = await this.prisma.order.aggregate({
-      where: { orderedAt: { gte: startOfMonth, lte: endOfMonth } },
-      _sum: { sellPrice: true },
-    });
-    const revenueMonth = revenueAggregate._sum?.sellPrice || 0;
-
-    const financeSummaries = await this.prisma.financeSummary.findMany();
-    let totalReturns = 0;
-    financeSummaries.forEach(f => totalReturns += f.returnsPerMonth);
-
-    return `<b>🏆 OYLIK YAKUNIY HISOBOT (Uzum ERP)</b>\n` +
-      `📅 <b>Davr:</b> ${monthName}\n\n` +
-      `💰 <b>Oylik Savdo:</b> ${new Intl.NumberFormat('uz-UZ').format(revenueMonth)} UZS\n` +
-      `📉 <b>Oylik Qaytarishlar (Vozvrat):</b> ${new Intl.NumberFormat('uz-UZ').format(totalReturns)} UZS\n` +
-      `📦 <b>Oylik Buyurtmalar:</b> ${totalOrdersMonth} ta\n` +
-      `🏬 <b>Ulangan Do'konlar:</b> ${shopsCount} ta\n\n` +
-      `📈 <i>ERP Avtomatizatsiya tizimi barqaror ishlamoqda.</i>`;
-  }
-
-
-
-  private async buildStatsMessage(): Promise<string> {
-    const [shops, products, reviews, financeSummaries] = await Promise.all([
-      this.prisma.shop.count(),
-      this.prisma.product.count(),
-      this.prisma.review.count(),
-      this.prisma.financeSummary.findMany(),
-    ]);
-
-    let last1Day = 0;
-    let last7Days = 0;
-    let last14Days = 0;
-    let last30Days = 0;
-
-    financeSummaries.forEach(f => {
-      const salesData = Array.isArray(f.salesChartData) ? f.salesChartData as any[] : [];
-      if (salesData.length > 0) {
-        last1Day += Number(salesData[salesData.length - 1]?.sales || 0);
-        last7Days += salesData.slice(-7).reduce((acc, curr) => acc + Number(curr.sales || 0), 0);
-        last14Days += salesData.slice(-14).reduce((acc, curr) => acc + Number(curr.sales || 0), 0);
-        last30Days += salesData.reduce((acc, curr) => acc + Number(curr.sales || 0), 0);
+    for (const shop of shops) {
+      message += `🏬 <b>${shop.name || 'Ombor'}</b>\n`;
+      
+      const info = await this.findOpenSlotInfo(token, shop.uzumShopId, undefined, shop.name);
+      if (info && info.openSlots && info.openSlots.length > 0) {
+        info.openSlots.slice(0, 3).forEach((s, i) => {
+            const sFrom = new Date(s.timeFrom);
+            const sTo = new Date(s.timeTo);
+            const sDateStr = sFrom.toLocaleDateString('ru-RU', { timeZone: 'Asia/Tashkent' });
+            const sFromTime = sFrom.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent' });
+            const sToTime = sTo.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent' });
+            message += `  ${i === 0 ? '🔥' : '✅'} <b>${sDateStr}</b> ${sFromTime} - ${sToTime}\n`;
+        });
+        if (info.openSlots.length > 3) {
+           message += `  └ ... va yana ${info.openSlots.length - 3} ta slot\n`;
+        }
+      } else {
+        message += `  ❌ <i>Hozircha ochiq slot yo'q.</i>\n`;
       }
-    });
+      message += `\n`;
+    }
 
-    const formatCurrency = (val: number) => new Intl.NumberFormat('uz-UZ').format(val);
-
-    return `<b>📈 UZUM ERP STATISTIKA VA MOLIYA</b>\n\n` +
-      `🏬 <b>Do'konlar:</b> ${shops} ta\n` +
-      `🛍️ <b>Mahsulotlar:</b> ${products} ta\n` +
-      `⭐ <b>Sharhlar:</b> ${reviews} ta\n\n` +
-      `💸 <b>Sotuvlar (Barcha do'konlar):</b>\n` +
-      `▪️ <b>Oxirgi 1 kun:</b> ${formatCurrency(last1Day)} so'm\n` +
-      `▪️ <b>Oxirgi 7 kun:</b> ${formatCurrency(last7Days)} so'm\n` +
-      `▪️ <b>Oxirgi 14 kun:</b> ${formatCurrency(last14Days)} so'm\n` +
-      `▪️ <b>Oxirgi 1 oy:</b> ${formatCurrency(last30Days)} so'm\n`;
+    message += `🔄 <i>Tekshirilgan vaqt: ${nowStr}</i>`;
+    return message;
   }
 }

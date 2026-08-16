@@ -14,9 +14,8 @@ export class BotController {
       botTokenConfigured: !!process.env.TELEGRAM_BOT_TOKEN,
       groupChatId: process.env.TELEGRAM_GROUP_ID || '5157263324',
       activeMonitors: [
-        'Time-slot monitoring (Every 1 min)',
-        'Daily Report (23:00)',
-        'Monthly Report (1st of month)',
+        'Time-slot alert monitoring (Every 30s)',
+        'Dashboard & Open Slots updates (Every 1 min)',
       ],
     };
   }
@@ -31,9 +30,9 @@ export class BotController {
     return { success, message: success ? 'Xabar Telegram guruhga yuborildi!' : 'Xabar yuborishda xatolik' };
   }
 
-  @Post('trigger-daily-report')
-  async triggerDailyReport() {
-    await this.botService.handleDailyReportCron();
-    return { success: true, message: 'Kunlik hisobot Telegram guruhga yuborildi!' };
+  @Post('trigger-dashboard-update')
+  async triggerDashboardUpdate() {
+    await this.botService.updateDashboardMessages();
+    return { success: true, message: 'Dashboard va Open slots xabarlari yangilandi!' };
   }
 }
