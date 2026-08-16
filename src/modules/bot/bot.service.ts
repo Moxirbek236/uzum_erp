@@ -20,6 +20,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     reportMessageId?: number, 
     slotsMessageId?: number,
     resolvedGroupChatId?: string,
+    groupMembers?: Record<number, { id: number; username?: string; name: string }>,
     shopAlerts?: Record<number, { messageId?: number; hasSlot: boolean; isInteracting: boolean; interactionUntil?: number }>
   } = {};
 
@@ -39,8 +40,12 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       if (!this.botState.shopAlerts) {
         this.botState.shopAlerts = {};
       }
+      if (!this.botState.groupMembers) {
+        this.botState.groupMembers = {};
+      }
     } catch (err) {
       this.botState.shopAlerts = {};
+      this.botState.groupMembers = {};
       this.logger.error('Failed to load bot state', err);
     }
   }
@@ -116,6 +121,48 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     await this.bot.deleteMessage(chatId, messageId).catch(() => {});
   }
 
+  async getGroupMentions(): Promise<string> {
+    try {
+      const chatId = this.getTargetChatId();
+      const userMap = new Map<number, string>();
+
+      // 1. Fetch group administrators
+      const admins = await this.bot?.getChatAdministrators(chatId).catch(() => []);
+      if (Array.isArray(admins)) {
+        for (const admin of admins) {
+          const u = admin.user;
+          if (u && !u.is_bot) {
+            if (u.username) {
+              userMap.set(u.id, `@${u.username}`);
+            } else {
+              userMap.set(u.id, `<a href="tg://user?id=${u.id}">${u.first_name || 'Foydalanuvchi'}</a>`);
+            }
+          }
+        }
+      }
+
+      // 2. Fetch known group members captured from messages
+      if (this.botState.groupMembers) {
+        for (const [idStr, u] of Object.entries(this.botState.groupMembers)) {
+          const id = Number(idStr);
+          if (!userMap.has(id)) {
+            if (u.username) {
+              userMap.set(id, `@${u.username}`);
+            } else {
+              userMap.set(id, `<a href="tg://user?id=${id}">${u.name || 'Foydalanuvchi'}</a>`);
+            }
+          }
+        }
+      }
+
+      const mentions = Array.from(userMap.values());
+      return mentions.join(' ');
+    } catch (err) {
+      this.logger.warn('Failed getting group mentions', err);
+      return '';
+    }
+  }
+
   onModuleDestroy() {
     if (this.bot) {
       this.logger.log('Stopping Telegram Bot polling...');
@@ -134,8 +181,18 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const BotConstructor = TelegramBot.default || TelegramBot;
       this.bot = new BotConstructor(this.botToken, { polling: true });
 
-      // Handle Telegram Bot Messages: auto-detect group chat id & clean user messages
+      // Handle Telegram Bot Messages: auto-detect group chat id, track members & clean user messages
       this.bot.on('message', async (msg: any) => {
+        if (msg.from && !msg.from.is_bot) {
+          if (!this.botState.groupMembers) this.botState.groupMembers = {};
+          this.botState.groupMembers[msg.from.id] = {
+            id: msg.from.id,
+            username: msg.from.username,
+            name: [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ') || 'Foydalanuvchi',
+          };
+          this.saveState();
+        }
+
         if (msg.chat) {
           if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
             if (this.botState.resolvedGroupChatId !== msg.chat.id.toString()) {
@@ -505,7 +562,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     let keyboard = undefined;
 
     if (hasSlot && info?.message && info?.timeFrom) {
-       textToSend = `📢 @all\n\n` + info.message;
+       const mentions = await this.getGroupMentions();
+       const mentionHeader = mentions ? `🔔 <b>DIQQAT:</b> ${mentions}\n\n` : '';
+       textToSend = mentionHeader + info.message;
        keyboard = {
          inline_keyboard: [
            [{ text: '📥 Bron qilish', callback_data: `book_start:${shopId}:${info.timeFrom}` }],
@@ -810,9 +869,12 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     const nowStr = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent' }).replace(',', '');
 
     const shops = await this.prisma.shop.findMany();
+    const mentions = await this.getGroupMentions();
+    const mentionHeader = mentions ? `${mentions}\n` : '';
     
     let message = `<b>📊 🌟 UZUM ERP DASHBOARD 🌟</b>\n`;
-    message += `@all <i>Hisobotlar yangilandi!</i>\n\n`;
+    message += mentionHeader;
+    message += `<i>Hisobotlar yangilandi!</i>\n\n`;
 
     let totalDailyRevenue = 0;
     let totalDailyOrders = 0;
