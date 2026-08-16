@@ -13,10 +13,14 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BotService.name);
   private bot: any = null;
   private readonly botToken = process.env.TELEGRAM_BOT_TOKEN;
+  private readonly baseUrl = process.env.UZUM_SELLER_API_BASE || 'https://api-seller.uzum.uz';
   private readonly groupChatId = process.env.TELEGRAM_GROUP_ID || '5157263324';
   private readonly stateFilePath = path.join(process.cwd(), 'bot-state.json');
-  private botState: { reportMessageId?: number, slotsMessageId?: number } = {};
-  private lastAlertMessageIds: Record<number, number> = {};
+  private botState: { 
+    reportMessageId?: number, 
+    slotsMessageId?: number,
+    shopAlerts?: Record<number, { messageId?: number; hasSlot: boolean; isInteracting: boolean; interactionUntil?: number }>
+  } = {};
 
   constructor(
     private readonly prisma: PrismaService,
@@ -31,7 +35,11 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         const data = fs.readFileSync(this.stateFilePath, 'utf8');
         this.botState = JSON.parse(data);
       }
+      if (!this.botState.shopAlerts) {
+        this.botState.shopAlerts = {};
+      }
     } catch (err) {
+      this.botState.shopAlerts = {};
       this.logger.error('Failed to load bot state', err);
     }
   }
@@ -62,59 +70,24 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const BotConstructor = TelegramBot.default || TelegramBot;
       this.bot = new BotConstructor(this.botToken, { polling: true });
 
-      // Handle Telegram Bot Commands
-      this.bot.onText(/\/report/, async (msg: any) => {
+      // Handle Telegram Bot Commands & Clean group messages
+      this.bot.on('message', async (msg: any) => {
+        if (msg.chat && (msg.chat.id.toString() === this.groupChatId || msg.chat.id.toString() === `-${this.groupChatId}`)) {
+            try {
+                await this.bot.deleteMessage(msg.chat.id, msg.message_id).catch(()=>null);
+            } catch(e) {}
+        }
+      });
+      
+      this.bot.onText(/\/report/, async () => {
         await this.updateDashboardMessages();
       });
 
-      this.bot.onText(/\/slots/, async (msg: any) => {
-        const chatId = msg.chat.id;
-        const token = await this.getUzumToken();
-        if (!token) {
-          this.bot?.sendMessage(chatId, `<b>🕒 TIME-SLOT MONITORING HOLATI</b>\n\n❌ <i>Uzum token topilmadi. Avval login qiling.</i>`, { parse_mode: 'HTML' });
-          return;
-        }
-
-        const shops = await this.prisma.shop.findMany({ take: 5 });
-        if (!shops.length) {
-          this.bot?.sendMessage(chatId, `<b>🕒 TIME-SLOT MONITORING HOLATI</b>\n\n❌ <i>Do'konlar topilmadi.</i>`, { parse_mode: 'HTML' });
-          return;
-        }
-
-        this.bot?.sendMessage(chatId, `🔍 <b>Do'konlar bo'yicha erkin slotlar tekshirilmoqda...</b>`, { parse_mode: 'HTML' });
-
-        for (const shop of shops) {
-          try {
-            const info = await this.findOpenSlotInfo(token, shop.uzumShopId, undefined, shop.name);
-            if (info && info.hasSlot && info.message && info.timeFrom) {
-              await this.bot.sendMessage(chatId, info.message, {
-                parse_mode: 'HTML',
-                reply_markup: {
-                  inline_keyboard: [
-                    [
-                      {
-                        text: "Avtomatik bron qilish",
-                        callback_data: `book_${shop.id}_${info.timeFrom}`,
-                      },
-                    ],
-                  ],
-                },
-              });
-            } else {
-              let noSlotMsg = `🏬 <b>${shop.name || 'Ombor'}</b>\n\n❌ <i>Hozircha erkin slot topilmadi.</i>`;
-              if (info?.debug) {
-                noSlotMsg += `\n\n🛠 <b>Debug:</b> <code>${info.debug}</code>`;
-              }
-              await this.bot.sendMessage(chatId, noSlotMsg, { parse_mode: 'HTML' });
-            }
-          } catch (err) {
-            this.logger.error(`Error checking slots for shop ${shop.uzumShopId} in /slots command`, err);
-            this.bot?.sendMessage(chatId, `🏬 <b>${shop.name || 'Ombor'}</b>\n\n❌ <i>Ma'lumot olishda xatolik yuz berdi.</i>`, { parse_mode: 'HTML' });
-          }
-        }
+      this.bot.onText(/\/slots/, async () => {
+        await this.handleSlotMonitoringCron();
       });
 
-      this.bot.onText(/\/stats/, async (msg: any) => {
+      this.bot.onText(/\/stats/, async () => {
         await this.updateDashboardMessages();
       });
 
@@ -468,74 +441,102 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  // Prevent spam by storing the last alerted timeFrom per shop
-  private lastAlertedSlot: Record<number, number> = {};
-
   private async checkSlotsForShop(token: string, shopId: number, shopName: string) {
     // Background cron job faqat 3 kun ichidagi slotlarni tekshiradi
     const info = await this.findOpenSlotInfo(token, shopId, 3, shopName);
-    if (!info || !info.hasSlot || !info.message || !info.timeFrom) return;
-
-    // Deduplication check: if we already sent an alert for this exact slot, don't spam.
-    if (this.lastAlertedSlot[shopId] === info.timeFrom) {
-      return;
-    }
     
-    this.lastAlertedSlot[shopId] = info.timeFrom;
+    if (!this.botState.shopAlerts) this.botState.shopAlerts = {};
+    const state = this.botState.shopAlerts[shopId] || { hasSlot: false, isInteracting: false };
 
-    await this.sendSlotAlert(shopId, info.message, info.timeFrom);
-    this.logger.log(
-      `Time-slot alert sent for shop ${shopId}, timeFrom ${info.timeFrom}`,
-    );
+    // Interaction Check - agar foydalanuvchi "Bron qilish" bosgan bo'lsa va timeout o'tmagan bo'lsa
+    const now = Date.now();
+    if (state.isInteracting && state.interactionUntil && state.interactionUntil > now) {
+        return; // Skip, edit qilinmay turadi
+    }
+    if (state.isInteracting) {
+        state.isInteracting = false; // Expired
+    }
+
+    const hasSlot = info ? info.hasSlot : false;
+    let nextStateHasSlot = hasSlot;
+    
+    let textToSend = '';
+    let keyboard = undefined;
+
+    if (hasSlot && info?.message && info?.timeFrom) {
+       textToSend = `📢 @all\n\n` + info.message;
+       keyboard = {
+         inline_keyboard: [
+           [{ text: '📥 Bron qilish', callback_data: `book_start:${shopId}:${info.timeFrom}` }],
+         ],
+       };
+    } else {
+       textToSend = `🏬 <b>${shopName}</b>\n\n💤 <i>Yaqin orada slotlar mavjud emas, lekin uzoqroq muddatga olsa bo'ladi. (Sotuvchi paneli orqali tekshiring)</i>\n\n🔄 <i>Tekshirilgan vaqt: ${new Date().toLocaleTimeString('ru-RU', { timeZone: 'Asia/Tashkent' })}</i>`;
+    }
+
+    const isTransition = (state.hasSlot !== nextStateHasSlot);
+    const shouldDeleteAndCreate = isTransition;
+
+    if (shouldDeleteAndCreate || !state.messageId) {
+        // Delete old
+        if (state.messageId) {
+            await this.bot.deleteMessage(this.groupChatId, state.messageId).catch(() => {});
+        }
+        // Create new
+        try {
+            const res = await this.bot.sendMessage(this.groupChatId, textToSend, {
+                parse_mode: 'HTML',
+                ...(keyboard ? { reply_markup: keyboard } : {})
+            });
+            state.messageId = res.message_id;
+        } catch (e) {
+            this.logger.error(`Error sending alert for shop ${shopId}`, e);
+        }
+    } else {
+        // Same state, just edit
+        if (state.messageId) {
+            try {
+                await this.bot.editMessageText(textToSend, {
+                    chat_id: this.groupChatId,
+                    message_id: state.messageId,
+                    parse_mode: 'HTML',
+                    ...(keyboard ? { reply_markup: keyboard } : {})
+                });
+            } catch (err: any) {
+                if (err.response?.body?.description?.includes('message to edit not found')) {
+                    const res = await this.bot.sendMessage(this.groupChatId, textToSend, {
+                        parse_mode: 'HTML',
+                        ...(keyboard ? { reply_markup: keyboard } : {})
+                    });
+                    state.messageId = res.message_id;
+                }
+            }
+        }
+    }
+
+    state.hasSlot = nextStateHasSlot;
+    this.botState.shopAlerts[shopId] = state;
+    this.saveState();
   }
 
   /**
-   * Sends the "erkin slot topildi" alert with an inline "Bron qilish" button.
+   * Tahrirlaydi (delete+create emas), faqat buttonlar bosilganda ishlatiladi
    */
-  private async sendSlotAlert(shopId: number, message: string, timeFrom: number) {
-    const keyboard = {
-      inline_keyboard: [
-        [{ text: '📥 Bron qilish', callback_data: `book_start:${shopId}:${timeFrom}` }],
-      ],
-    };
-    
-    // Delete old alert if exists for this shop
-    if (this.lastAlertMessageIds[shopId]) {
-      try {
-        await this.bot.deleteMessage(this.groupChatId, this.lastAlertMessageIds[shopId]).catch(() => {});
-      } catch (e) {}
-    }
-
-    try {
-        const res = await this.bot.sendMessage(this.groupChatId, message, {
-            parse_mode: 'HTML',
-            reply_markup: keyboard
-        });
-        this.lastAlertMessageIds[shopId] = res.message_id;
-    } catch(err) {
-        this.logger.error(`Failed to send alert for shop ${shopId}`, err);
-    }
-  }
-
-  /**
-   * Deletes the given message and sends a new one in its place (delete + create,
-   * not edit — matches the requested UX for every button interaction).
-   */
-  private async deleteAndSend(
-    chatId: number,
+  private async editAlertMessage(
+    chatId: number | string,
     messageId: number,
     text: string,
     replyMarkup?: any,
   ) {
     try {
-      if (this.bot?.deleteMessage) {
-        await this.bot.deleteMessage(chatId, messageId).catch(() => undefined);
-      }
-    } finally {
-      await this.bot?.sendMessage(chatId, text, {
-        parse_mode: 'HTML',
-        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-      });
+        await this.bot.editMessageText(text, {
+            chat_id: chatId,
+            message_id: messageId,
+            parse_mode: 'HTML',
+            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+        });
+    } catch (err) {
+        this.logger.error('Failed to edit alert message', err);
     }
   }
 
@@ -558,23 +559,36 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     try {
       if (data.startsWith('book_start:')) {
         const [, shopIdStr, timeFromStr] = data.split(':');
-        await this.showInvoiceSelection(chatId, messageId, Number(shopIdStr), Number(timeFromStr));
+        const shopId = Number(shopIdStr);
+        if (this.botState.shopAlerts?.[shopId]) {
+            this.botState.shopAlerts[shopId].isInteracting = true;
+            this.botState.shopAlerts[shopId].interactionUntil = Date.now() + 3 * 60 * 1000; // 3 min
+            this.saveState();
+        }
+        await this.showInvoiceSelection(chatId, messageId, shopId, Number(timeFromStr));
       } else if (data.startsWith('book_select:')) {
         const [, shopIdStr, timeFromStr, invoiceIdStr] = data.split(':');
+        const shopId = Number(shopIdStr);
         const username = query.from?.username
           ? `@${query.from.username}`
           : query.from?.first_name || 'Foydalanuvchi';
+        
         await this.performBooking(
           chatId,
           messageId,
-          Number(shopIdStr),
+          shopId,
           Number(timeFromStr),
           Number(invoiceIdStr),
           username,
         );
       } else if (data.startsWith('book_back:')) {
         const [, shopIdStr] = data.split(':');
-        await this.backToSlotAlert(chatId, messageId, Number(shopIdStr));
+        const shopId = Number(shopIdStr);
+        if (this.botState.shopAlerts?.[shopId]) {
+            this.botState.shopAlerts[shopId].isInteracting = false;
+            this.saveState();
+        }
+        await this.backToSlotAlert(chatId, messageId, shopId);
       }
     } catch (err) {
       this.logger.error('handleCallbackQuery error', err);
@@ -593,7 +607,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   ) {
     const token = await this.getUzumToken();
     if (!token) {
-      await this.deleteAndSend(chatId, messageId, `❌ <i>Uzum token topilmadi.</i>`);
+      await this.editAlertMessage(chatId, messageId, `❌ <i>Uzum token topilmadi.</i>`);
       return;
     }
 
@@ -608,7 +622,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
 
       if (res.status === 401) {
          await this.refreshUzumToken();
-         await this.deleteAndSend(
+         await this.editAlertMessage(
            chatId,
            messageId,
            `❌ <i>Sessiya eskirgan edi. Auto-login orqali token yangilandi. Iltimos, qayta urinib ko'ring.</i>`,
@@ -618,7 +632,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       }
 
       if (!res.ok) {
-        await this.deleteAndSend(
+        await this.editAlertMessage(
           chatId,
           messageId,
           `❌ <i>Nakladnoylarni olishda xatolik yuz berdi.</i>`,
@@ -634,7 +648,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       );
 
       if (bookable.length === 0) {
-        await this.deleteAndSend(
+        await this.editAlertMessage(
           chatId,
           messageId,
           `<b>📋 BRON QILISH UCHUN NAKLADNOY YO'Q</b>\n\n` +
@@ -657,10 +671,10 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         `🔢 <b>Jami:</b> ${bookable.length} ta nakladnoy\n\n` +
         `👇 <i>Kerakli nakladnoyni tanlang:</i>`;
 
-      await this.deleteAndSend(chatId, messageId, text, { inline_keyboard: buttons });
+      await this.editAlertMessage(chatId, messageId, text, { inline_keyboard: buttons });
     } catch (err) {
       this.logger.error(`showInvoiceSelection error for shopId ${shopId}`, err);
-      await this.deleteAndSend(chatId, messageId, `❌ <i>Xatolik yuz berdi.</i>`);
+      await this.editAlertMessage(chatId, messageId, `❌ <i>Xatolik yuz berdi.</i>`);
     }
   }
 
@@ -670,33 +684,18 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
    */
   private async backToSlotAlert(chatId: number, messageId: number, shopId: number) {
     const token = await this.getUzumToken();
-    if (!token) {
-      await this.deleteAndSend(chatId, messageId, `❌ <i>Uzum token topilmadi.</i>`);
-      return;
-    }
-
     const shop = await this.prisma.shop.findFirst({ where: { uzumShopId: shopId } });
-    const info = await this.findOpenSlotInfo(token, shopId, undefined, shop?.name);
-    if (!info || !info.hasSlot || !info.message || !info.timeFrom) {
-      await this.deleteAndSend(
-        chatId,
-        messageId,
-        `<i>Bu do'kon uchun hozircha erkin slot topilmadi.</i>`,
-      );
+    if (!token || !shop) {
+      await this.editAlertMessage(chatId, messageId, `❌ <i>Uzum token yoki do'kon topilmadi.</i>`);
       return;
     }
 
-    const keyboard = {
-      inline_keyboard: [
-        [{ text: '📥 Bron qilish', callback_data: `book_start:${shopId}:${info.timeFrom}` }],
-      ],
-    };
-    await this.deleteAndSend(chatId, messageId, info.message, keyboard);
+    await this.checkSlotsForShop(token, shopId, shop.name);
   }
 
   /**
    * Tanlangan nakladnoy uchun time-slot bron qilish so'rovini yuboradi
-   * va natijani (muvaffaqiyatli/xatolik) yangi xabar sifatida chiqaradi.
+   * va natijani (muvaffaqiyatli/xatolik) xabarni tahrirlash orqali chiqaradi.
    */
   private async performBooking(
     chatId: number,
@@ -708,7 +707,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   ) {
     const token = await this.getUzumToken();
     if (!token) {
-      await this.deleteAndSend(chatId, messageId, `❌ <i>Uzum token topilmadi.</i>`);
+      await this.editAlertMessage(chatId, messageId, `❌ <i>Uzum token topilmadi.</i>`);
       return;
     }
 
@@ -732,7 +731,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
 
       if (res.status === 401) {
          await this.refreshUzumToken();
-         await this.deleteAndSend(chatId, messageId, `❌ <i>Sessiya muddati tugagan edi. Auto-login orqali token yangilandi. Iltimos, qaytadan bron qilib ko'ring.</i>`);
+         await this.editAlertMessage(chatId, messageId, `❌ <i>Sessiya muddati tugagan edi. Auto-login orqali token yangilandi. Iltimos, qaytadan bron qilib ko'ring.</i>`, { inline_keyboard: [[{ text: '⬅️ Ortga', callback_data: `book_back:${shopId}` }]] });
          return;
       }
 
@@ -740,11 +739,18 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
 
       if (res.ok) {
         const text =
-          `<b>✅ Muvaffaqiyatli bron qilindi!</b>\n\n` +
+          `<b>✅ Muvaffaqiyatli bron qilindi!</b> 🎉\n\n` +
           `📦 <b>Nakladnoy ID:</b> #${invoiceId}\n` +
-          `👤 <b>Bron qildi:</b> ${username}`;
-        await this.deleteAndSend(chatId, messageId, text);
+          `👤 <b>Bron qildi:</b> ${username}\n` +
+          `🕒 <b>Vaqti:</b> ${new Date(timeFrom).toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent' })}`;
+        await this.editAlertMessage(chatId, messageId, text);
         this.logger.log(`Booking success for invoice ${invoiceId} by ${username}`);
+
+        // Keep interaction lock for 15 seconds so cron doesn't overwrite it immediately
+        if (this.botState.shopAlerts?.[shopId]) {
+          this.botState.shopAlerts[shopId].interactionUntil = Date.now() + 15 * 1000;
+          this.saveState();
+        }
       } else {
         const errMsg = resultData?.message || resultData?.error || `HTTP ${res.status}`;
         const text =
@@ -752,11 +758,13 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
           `📦 <b>Nakladnoy ID:</b> #${invoiceId}\n` +
           `👤 <b>Urinish:</b> ${username}\n` +
           `⚠️ <b>Xato:</b> ${errMsg}`;
-        await this.deleteAndSend(chatId, messageId, text);
+        await this.editAlertMessage(chatId, messageId, text, {
+          inline_keyboard: [[{ text: '⬅️ Ortga', callback_data: `book_back:${shopId}` }]],
+        });
       }
     } catch (err) {
       this.logger.error(`performBooking error for invoice ${invoiceId}`, err);
-      await this.deleteAndSend(chatId, messageId, `❌ <i>Bron qilishda xatolik yuz berdi.</i>`);
+      await this.editAlertMessage(chatId, messageId, `❌ <i>Bron qilishda xatolik yuz berdi.</i>`);
     }
   }
 
