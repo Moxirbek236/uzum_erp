@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { UzumAuthService } from '../uzum-integration/uzum-auth/uzum-auth.service';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -17,7 +18,10 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   private botState: { reportMessageId?: number, slotsMessageId?: number } = {};
   private lastAlertMessageIds: Record<number, number> = {};
 
-  constructor(private readonly prisma: PrismaService) { 
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly uzumAuthService: UzumAuthService
+  ) { 
     this.loadState();
   }
 
@@ -297,6 +301,27 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     return firstUser?.uzumToken || null;
   }
 
+  private async refreshUzumToken(): Promise<string | null> {
+    if (process.env.AUTO_LOGIN !== 'true') return null;
+    const autoUser = process.env.UZUM_USERNAME;
+    const autoPass = process.env.UZUM_PASSWORD;
+    if (!autoUser || !autoPass) return null;
+
+    this.logger.log('Auto-login triggered due to 401 Unauthorized in BotService');
+    const session = await this.uzumAuthService.loginToUzum(autoUser, autoPass);
+    if (session && session.token) {
+      const user = await this.prisma.user.findFirst({ where: { uzumToken: { not: null } } });
+      if (user) {
+        await this.prisma.user.update({
+          where: { id: user.id },
+          data: { uzumToken: session.token }
+        });
+        return session.token;
+      }
+    }
+    return null;
+  }
+
   /**
    * Checks a shop's latest invoice for open time slots within the next 3 days.
    * Returns the alert message text + the earliest open timeFrom, or hasSlot:false.
@@ -316,6 +341,14 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         `${baseUrl}/api/seller/shop/${shopId}/invoice?page=0&size=20`,
         { headers },
       );
+      
+      if (invoiceRes.status === 401) {
+        const newToken = await this.refreshUzumToken();
+        if (newToken) {
+            return { hasSlot: false, debug: `Token yangilandi (Auto-login). Keyingi tekshiruvda ishlaydi.` };
+        }
+      }
+
       if (!invoiceRes.ok) return { hasSlot: false, debug: `Invoice API returned status: ${invoiceRes.status}` };
 
       const rawInvoices = await invoiceRes.json();
@@ -573,6 +606,17 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         { headers },
       );
 
+      if (res.status === 401) {
+         await this.refreshUzumToken();
+         await this.deleteAndSend(
+           chatId,
+           messageId,
+           `❌ <i>Sessiya eskirgan edi. Auto-login orqali token yangilandi. Iltimos, qayta urinib ko'ring.</i>`,
+           { inline_keyboard: [[{ text: '⬅️ Ortga', callback_data: `book_back:${shopId}` }]] },
+         );
+         return;
+      }
+
       if (!res.ok) {
         await this.deleteAndSend(
           chatId,
@@ -685,6 +729,12 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
           }),
         },
       );
+
+      if (res.status === 401) {
+         await this.refreshUzumToken();
+         await this.deleteAndSend(chatId, messageId, `❌ <i>Sessiya muddati tugagan edi. Auto-login orqali token yangilandi. Iltimos, qaytadan bron qilib ko'ring.</i>`);
+         return;
+      }
 
       const resultData = await res.json().catch(() => null);
 
